@@ -43,8 +43,12 @@ impl P2pServer {
             .build();
 
         let litep2p = Litep2p::new(litep2p_config).expect("failed to create litep2p");
-        let addresses = litep2p.listen_addresses().next().unwrap();
-        println!("Litep2p listening on {:?}", addresses);
+        let address = litep2p
+            .listen_addresses()
+            .next()
+            .unwrap_or_else(|| panic!("litep2p listen {} failed", server_addr));
+
+        println!("Litep2p listening on {:?}", address);
 
         Self {
             litep2p,
