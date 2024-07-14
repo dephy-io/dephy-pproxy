@@ -15,7 +15,7 @@ use tonic::transport::Server;
 
 fn parse_args() -> Command {
     let mut app = Command::new("pproxy")
-        .about("A proxy tool based on p2p network")
+        .about("A proxy tool based on libp2p network")
         .version("0.1.0");
 
     let serve = Command::new("serve")
