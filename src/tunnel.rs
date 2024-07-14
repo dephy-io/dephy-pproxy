@@ -156,7 +156,6 @@ impl TunnelServerListener {
                 Ok(Ok(_resp)) => {}
             }
 
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             if let Err(e) = tunnel.listen(stream, tunnel_rx).await {
                 tracing::error!("Tunnel listen failed: {e:?}");
                 continue;

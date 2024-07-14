@@ -1,7 +1,6 @@
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
-use tracing::trace;
 
 use crate::PProxyHandle;
 
@@ -29,7 +28,7 @@ impl proto::command_service_server::CommandService for PProxyCommander {
         &self,
         request: Request<proto::AddPeerRequest>,
     ) -> Result<Response<proto::AddPeerResponse>, Status> {
-        trace!("handle request: {:?}", request);
+        tracing::trace!("handle request: {:?}", request);
 
         self.handle
             .add_peer(request.into_inner())
@@ -43,7 +42,7 @@ impl proto::command_service_server::CommandService for PProxyCommander {
         request: tonic::Request<proto::CreateTunnelServerRequest>,
     ) -> std::result::Result<tonic::Response<proto::CreateTunnelServerResponse>, tonic::Status>
     {
-        trace!("handle request: {:?}", request);
+        tracing::trace!("handle request: {:?}", request);
 
         self.handle
             .create_tunnel_server(request.into_inner())

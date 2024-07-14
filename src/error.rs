@@ -19,16 +19,12 @@ pub enum Error {
     Litep2p(#[from] litep2p::Error),
     #[error("Litep2p request response error: {0:?}")]
     Litep2pRequestResponseError(litep2p::protocol::request_response::RequestResponseError),
-    #[error("Httparse error: {0}")]
-    Httparse(#[from] httparse::Error),
-    #[error("Incomplete http request")]
-    IncompleteHttpRequest,
     #[error("Protocol not support: {0}")]
     ProtocolNotSupport(String),
-    #[error("Io error: {0}")]
-    Io(#[from] std::io::Error),
     #[error("Unexpected response type")]
     UnexpectedResponseType,
+    #[error("Tunnel not waiting")]
+    TunnelNotWaiting(String),
     #[error("Tunnel error: {0:?}")]
     Tunnel(TunnelError),
     #[error("Protobuf decode error: {0}")]

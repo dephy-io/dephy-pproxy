@@ -8,12 +8,12 @@ use futures::channel::oneshot;
 use litep2p::crypto::ed25519::SecretKey;
 use litep2p::protocol::request_response::DialOptions;
 use litep2p::protocol::request_response::RequestResponseEvent;
+use litep2p::types::RequestId;
 use litep2p::PeerId;
 use multiaddr::Multiaddr;
 use multiaddr::Protocol;
 use prost::Message;
 use tokio::sync::mpsc;
-use tracing::warn;
 
 use crate::command::proto::AddPeerRequest;
 use crate::command::proto::AddPeerResponse;
@@ -77,6 +77,7 @@ pub struct PProxy {
     command_rx: mpsc::Receiver<(PProxyCommand, CommandNotifier)>,
     p2p_server: P2pServer,
     proxy_addr: Option<SocketAddr>,
+    outbound_ready_notifiers: HashMap<RequestId, CommandNotifier>,
     inbound_tunnels: HashMap<(PeerId, TunnelId), Tunnel>,
     tunnel_txs: HashMap<(PeerId, TunnelId), mpsc::Sender<Vec<u8>>>,
 }
@@ -118,6 +119,7 @@ impl PProxy {
                 command_rx,
                 p2p_server: P2pServer::new(secret_key, server_addr),
                 proxy_addr,
+                outbound_ready_notifiers: HashMap::new(),
                 inbound_tunnels: HashMap::new(),
                 tunnel_txs: HashMap::new(),
             },
@@ -138,14 +140,14 @@ impl PProxy {
                 event = self.p2p_server.next_event() => match event {
                     None => return,
                     Some(event) => if let Err(error) = self.handle_p2p_server_event(event).await {
-                        warn!("failed to handle event: {:?}", error);
+                        tracing::warn!("failed to handle event: {:?}", error);
                     }
                 },
 
                 command = self.command_rx.recv() => match command {
                     None => return,
                     Some((command, tx)) => if let Err(error) = self.handle_command(command, tx).await {
-                        warn!("failed to handle command: {:?}", error);
+                        tracing::warn!("failed to handle command: {:?}", error);
                     }
                 }
             }
@@ -166,7 +168,7 @@ impl PProxy {
                 ..
             }) => {
                 let msg = proto::Tunnel::decode(request.as_slice())?;
-                tracing::debug!("received Tunnel msg: {:?}", msg);
+                tracing::debug!("received Tunnel request msg: {:?}", msg);
 
                 match msg.command() {
                     proto::TunnelCommand::Connect => {
@@ -221,11 +223,49 @@ impl PProxy {
 
                     _ => {
                         return Err(Error::ProtocolNotSupport(
-                            "Wrong tunnel command".to_string(),
+                            "Wrong tunnel request command".to_string(),
                         ));
                     }
                 }
             }
+            P2pServerEvent::TunnelEvent(RequestResponseEvent::ResponseReceived {
+                peer,
+                request_id,
+                response,
+                ..
+            }) => {
+                // This is response of TunnelCommand::Package
+                if response.is_empty() {
+                    return Ok(());
+                }
+
+                let msg = proto::Tunnel::decode(response.as_slice())?;
+                tracing::debug!("received Tunnel response msg: {:?}", msg);
+
+                match msg.command() {
+                    proto::TunnelCommand::ConnectResp => {
+                        let tx = self
+                            .outbound_ready_notifiers
+                            .remove(&request_id)
+                            .ok_or_else(|| {
+                                Error::TunnelNotWaiting(format!(
+                                    "peer {}, tunnel {}",
+                                    peer, msg.tunnel_id
+                                ))
+                            })?;
+
+                        tx.send(Ok(PProxyCommandResponse::SendConnectCommand {}))
+                            .map_err(|_| Error::EssentialTaskClosed)?;
+                    }
+
+                    _ => {
+                        return Err(Error::ProtocolNotSupport(
+                            "Wrong tunnel response command".to_string(),
+                        ));
+                    }
+                }
+            }
+
             _ => {}
         }
 
@@ -286,15 +326,16 @@ impl PProxy {
         }
         .encode_to_vec();
 
-        self.p2p_server
+        tracing::info!("send connect command to peer_id: {:?}", peer_id);
+        let request_id = self
+            .p2p_server
             .tunnel_handle
             .send_request(peer_id, request, DialOptions::Dial)
             .await?;
 
-        tracing::info!("send connect command to peer_id: {:?}", peer_id);
+        self.outbound_ready_notifiers.insert(request_id, tx);
 
-        tx.send(Ok(PProxyCommandResponse::SendConnectCommand {}))
-            .map_err(|_| Error::EssentialTaskClosed)
+        Ok(())
     }
 
     async fn on_send_outbound_package_command(
