@@ -25,6 +25,8 @@ pub enum Error {
     UnexpectedResponseType,
     #[error("Tunnel not waiting")]
     TunnelNotWaiting(String),
+    #[error("Tunnel dial failed: {0}")]
+    TunnelDialFailed(String),
     #[error("Tunnel error: {0:?}")]
     Tunnel(TunnelError),
     #[error("Protobuf decode error: {0}")]

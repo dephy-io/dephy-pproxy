@@ -38,8 +38,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Default channel size.
 const DEFAULT_CHANNEL_SIZE: usize = 4096;
 
-/// Timeout for proxied TCP connections
-pub const TCP_SERVER_TIMEOUT: u64 = 30;
+/// Timeout for local TCP server.
+pub const LOCAL_TCP_TIMEOUT: u64 = 5;
+
+/// Timeout for remote TCP server.
+pub const REMOTE_TCP_TIMEOUT: u64 = 30;
 
 /// Public result type error type used by the crate.
 pub use crate::error::Error;
@@ -154,6 +157,24 @@ impl PProxy {
         }
     }
 
+    async fn dial_tunnel(
+        &mut self,
+        proxy_addr: SocketAddr,
+        peer_id: PeerId,
+        tunnel_id: TunnelId,
+    ) -> Result<()> {
+        let stream = tcp_connect_with_timeout(proxy_addr, LOCAL_TCP_TIMEOUT).await?;
+
+        let mut tunnel = Tunnel::new(peer_id, tunnel_id, self.command_tx.clone());
+        let (tunnel_tx, tunnel_rx) = mpsc::channel(1024);
+        tunnel.listen(stream, tunnel_rx).await?;
+
+        self.inbound_tunnels.insert((peer_id, tunnel_id), tunnel);
+        self.tunnel_txs.insert((peer_id, tunnel_id), tunnel_tx);
+
+        Ok(())
+    }
+
     async fn handle_p2p_server_event(&mut self, event: P2pServerEvent) -> Result<()> {
         tracing::debug!("received P2pServerEvent: {:?}", event);
         #[allow(clippy::single_match)]
@@ -182,18 +203,18 @@ impl PProxy {
                             .parse()
                             .map_err(|_| Error::TunnelIdParseError(msg.tunnel_id))?;
 
-                        let stream = tcp_connect_with_timeout(proxy_addr, 60).await?;
-                        let mut tunnel = Tunnel::new(peer, tunnel_id, self.command_tx.clone());
-                        let (tunnel_tx, tunnel_rx) = mpsc::channel(1024);
-                        tunnel.listen(stream, tunnel_rx).await?;
-
-                        self.inbound_tunnels.insert((peer, tunnel_id), tunnel);
-                        self.tunnel_txs.insert((peer, tunnel_id), tunnel_tx);
+                        let data = match self.dial_tunnel(proxy_addr, peer, tunnel_id).await {
+                            Ok(_) => None,
+                            Err(e) => {
+                                tracing::warn!("failed to dial tunnel: {:?}", e);
+                                Some(e.to_string().into_bytes())
+                            }
+                        };
 
                         let response = proto::Tunnel {
                             tunnel_id: tunnel_id.to_string(),
                             command: proto::TunnelCommand::ConnectResp.into(),
-                            data: None,
+                            data,
                         };
 
                         self.p2p_server
@@ -254,8 +275,14 @@ impl PProxy {
                                 ))
                             })?;
 
-                        tx.send(Ok(PProxyCommandResponse::SendConnectCommand {}))
-                            .map_err(|_| Error::EssentialTaskClosed)?;
+                        match msg.data {
+                            None => tx.send(Ok(PProxyCommandResponse::SendConnectCommand {})),
+                            Some(data) => tx.send(Err(Error::TunnelDialFailed(
+                                String::from_utf8(data)
+                                    .unwrap_or("Unknown (decode failed)".to_string()),
+                            ))),
+                        }
+                        .map_err(|_| Error::EssentialTaskClosed)?;
                     }
 
                     _ => {
