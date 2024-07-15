@@ -123,7 +123,6 @@ jobs:
           body: "${{ steps.git-cliff.outputs.content }}"
           tag_name: ${{ needs.gen_version.outputs.version }}
           prerelease: ${{ needs.gen_version.outputs.version == 'prerelease' }}
-          title: ${{ needs.gen_version.outputs.version }}
           files: |
             LICENSE
             pproxy-${{ needs.gen_version.outputs.version }}-x86_64-apple-darwin/*.zip
