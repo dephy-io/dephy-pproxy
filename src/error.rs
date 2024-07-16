@@ -56,7 +56,7 @@ pub enum TunnelError {
     /// use elsewhere.
     AddrInUse = 8,
     /// Tunnel already listened.
-    TunnelInUse = 9,
+    AlreadyListened = 9,
     /// Unknown [std::io::ErrorKind] error.
     Unknown = u8::MAX,
 }
