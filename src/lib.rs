@@ -17,6 +17,8 @@ use tokio::sync::mpsc;
 
 use crate::command::proto::AddPeerRequest;
 use crate::command::proto::AddPeerResponse;
+use crate::command::proto::CreateEntranceRequest;
+use crate::command::proto::CreateEntranceResponse;
 use crate::command::proto::CreateTunnelServerRequest;
 use crate::command::proto::CreateTunnelServerResponse;
 use crate::server::*;
@@ -89,6 +91,7 @@ pub struct PProxyHandle {
     command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
     next_tunnel_id: Arc<AtomicUsize>,
     tunnel_servers: Mutex<HashMap<PeerId, TunnelServer>>,
+    entrances: Mutex<HashMap<PeerId, Entrance>>,
 }
 
 pub enum FullLength {
@@ -451,6 +454,18 @@ impl PProxyHandle {
             peer_id: peer_id.to_string(),
             address: address.to_string(),
         })
+    }
+
+    pub async fn creaet_entrance(
+        &self,
+        request: CreateEntranceRequest,
+    ) -> Result<CreateEntranceResponse> {
+        let peer_id = request
+            .peer_id
+            .parse()
+            .map_err(|_| Error::PeerIdParseError(request.peer_id))?;
+
+        let mut entranc
     }
 }
 

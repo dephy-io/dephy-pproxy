@@ -20,7 +20,17 @@ message CreateTunnelServerResponse {
   string address = 2;
 }
 
+message CreateEntranceRequest {
+  string peer_id = 1;
+}
+
+message CreateEntranceResponse {
+  string peer_id = 1;
+  string address = 2;
+}
+
 service CommandService {
   rpc AddPeer(AddPeerRequest) returns (AddPeerResponse);
   rpc CreateTunnelServer(CreateTunnelServerRequest) returns (CreateTunnelServerResponse);
+  rpc CreateEntrance(CreateEntranceRequest) returns (CreateEntranceResponse);
 }

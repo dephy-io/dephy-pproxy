@@ -28,7 +28,7 @@ impl proto::command_service_server::CommandService for PProxyCommander {
         &self,
         request: Request<proto::AddPeerRequest>,
     ) -> Result<Response<proto::AddPeerResponse>, Status> {
-        tracing::trace!("handle request: {:?}", request);
+        tracing::debug!("handle request: {:?}", request);
 
         self.handle
             .add_peer(request.into_inner())
@@ -42,10 +42,23 @@ impl proto::command_service_server::CommandService for PProxyCommander {
         request: tonic::Request<proto::CreateTunnelServerRequest>,
     ) -> std::result::Result<tonic::Response<proto::CreateTunnelServerResponse>, tonic::Status>
     {
-        tracing::trace!("handle request: {:?}", request);
+        tracing::debug!("handle request: {:?}", request);
 
         self.handle
             .create_tunnel_server(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|e| tonic::Status::internal(format!("{:?}", e)))
+    }
+
+    async fn create_entrance(
+        &self,
+        request: tonic::Request<proto::CreateEntranceRequest>,
+    ) -> std::result::Result<tonic::Response<proto::CreateEntranceResponse>, tonic::Status> {
+        tracing::debug!("handle request: {:?}", request);
+
+        self.handle
+            .create_entrance(request.into_inner())
             .await
             .map(Response::new)
             .map_err(|e| tonic::Status::internal(format!("{:?}", e)))
