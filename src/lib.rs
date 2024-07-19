@@ -26,6 +26,7 @@ use crate::tunnel::Tunnel;
 use crate::tunnel::TunnelServer;
 use crate::types::*;
 
+pub mod auth;
 pub mod command;
 pub mod error;
 mod server;
