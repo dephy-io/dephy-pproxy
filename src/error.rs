@@ -15,10 +15,8 @@ pub enum Error {
     TunnelIdParseError(String),
     #[error("Essential task closed")]
     EssentialTaskClosed,
-    #[error("Litep2p error: {0}")]
-    Litep2p(#[from] litep2p::Error),
-    #[error("Litep2p request response error: {0:?}")]
-    Litep2pRequestResponseError(litep2p::protocol::request_response::RequestResponseError),
+    #[error("Libp2p swarm create error: {0}")]
+    Libp2pSwarmCreateError(String),
     #[error("Protocol not support: {0}")]
     ProtocolNotSupport(String),
     #[error("Unexpected response type")]
@@ -70,12 +68,6 @@ impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
 impl From<futures::channel::oneshot::Canceled> for Error {
     fn from(_: futures::channel::oneshot::Canceled) -> Self {
         Error::EssentialTaskClosed
-    }
-}
-
-impl From<litep2p::protocol::request_response::RequestResponseError> for Error {
-    fn from(err: litep2p::protocol::request_response::RequestResponseError) -> Self {
-        Error::Litep2pRequestResponseError(err)
     }
 }
 

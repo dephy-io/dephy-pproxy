@@ -1,17 +1,14 @@
 [package]
 name = "dephy-pproxy"
-version = "0.1.1"
+version = "0.2.1"
 edition = "2021"
 
 [dependencies]
-base64 = "0.22.1"
+async-trait = "0.1.81"
 clap = "4.5.4"
 futures = "0.3.30"
-futures-util = "0.3.30"
 hex = "0.4.3"
-litep2p = { git = "https://github.com/Ma233/litep2p.git", rev = "144d81c" }
-# Do not upgrade multiaddr, see: https://github.com/paritytech/litep2p/pull/91
-multiaddr = "0.17.1"
+libp2p = { version = "0.53.2", features = ["tokio", "macros", "yamux", "noise", "tcp", "request-response"] }
 prost = "0.13.1"
 thiserror = "1.0.60"
 tokio = { version = "1.37.0", features = ["rt-multi-thread"] }
@@ -27,3 +24,6 @@ tonic-build = "0.12.1"
 [[bin]]
 name = "pproxy"
 path = "src/main.rs"
+
+[dev-dependencies]
+futures_ringbuf = "0.4.0"

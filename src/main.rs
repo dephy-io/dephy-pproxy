@@ -9,8 +9,8 @@ use dephy_pproxy::command::proto::AddPeerRequest;
 use dephy_pproxy::command::proto::CreateTunnelServerRequest;
 use dephy_pproxy::command::PProxyCommander;
 use dephy_pproxy::PProxy;
-use litep2p::crypto::ed25519::SecretKey;
-use multiaddr::Multiaddr;
+use libp2p::identity;
+use libp2p::Multiaddr;
 use tonic::transport::Server;
 
 fn parse_args() -> Command {
@@ -89,10 +89,11 @@ async fn serve(args: &ArgMatches) {
     let key = args
         .get_one::<String>("KEY")
         .map(|key| {
-            SecretKey::try_from_bytes(hex::decode(key).expect("Invalid key")).expect("Invalid key")
+            identity::ed25519::SecretKey::try_from_bytes(hex::decode(key).expect("Invalid key"))
+                .expect("Invalid key")
         })
         .unwrap_or_else(|| {
-            let key = SecretKey::generate();
+            let key = identity::ed25519::SecretKey::generate();
             println!("Generated key: {}", hex::encode(&key));
             key
         });
@@ -113,7 +114,12 @@ async fn serve(args: &ArgMatches) {
     println!("server_addr: {}", server_addr);
     println!("commander_server_addr: {}", commander_server_addr);
 
-    let (pproxy, pproxy_handle) = PProxy::new(key, server_addr, proxy_addr);
+    let (pproxy, pproxy_handle) = PProxy::new(
+        identity::ed25519::Keypair::from(key).into(),
+        server_addr,
+        proxy_addr,
+    )
+    .expect("Create pproxy failed");
 
     let commander = PProxyCommander::new(pproxy_handle);
     let commander_server =
