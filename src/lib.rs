@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use futures::channel::oneshot;
 use futures::StreamExt;
 use libp2p::identity::Keypair;
-use libp2p::multiaddr;
+use libp2p::multiaddr::Protocol;
 use libp2p::request_response;
 use libp2p::swarm::SwarmEvent;
 use libp2p::Multiaddr;
@@ -58,11 +58,11 @@ type CommandNotifier = oneshot::Sender<CommandNotification>;
 #[derive(Debug)]
 pub enum PProxyCommand {
     AddPeer {
-        address: Multiaddr,
+        multiaddr: Multiaddr,
         peer_id: PeerId,
     },
     ConnectRelay {
-        address: Multiaddr,
+        multiaddr: Multiaddr,
     },
     SendConnectCommand {
         peer_id: PeerId,
@@ -78,7 +78,7 @@ pub enum PProxyCommand {
 
 pub enum PProxyCommandResponse {
     AddPeer { peer_id: PeerId },
-    ConnectRelay { relaied_address: Multiaddr },
+    ConnectRelay { relaied_multiaddr: Multiaddr },
     SendConnectCommand {},
     SendOutboundPackageCommand {},
 }
@@ -284,7 +284,7 @@ impl PProxy {
             },
 
             SwarmEvent::NewListenAddr { mut address, .. } => {
-                address.push(multiaddr::Protocol::P2p(*self.swarm.local_peer_id()));
+                address.push(Protocol::P2p(*self.swarm.local_peer_id()));
                 println!("Local node is listening on {address}");
             }
 
@@ -296,10 +296,10 @@ impl PProxy {
 
     async fn handle_command(&mut self, command: PProxyCommand, tx: CommandNotifier) -> Result<()> {
         match command {
-            PProxyCommand::AddPeer { address, peer_id } => {
-                self.on_add_peer(address, peer_id, tx).await
+            PProxyCommand::AddPeer { multiaddr, peer_id } => {
+                self.on_add_peer(multiaddr, peer_id, tx).await
             }
-            PProxyCommand::ConnectRelay { address } => self.on_connect_relay(address, tx).await,
+            PProxyCommand::ConnectRelay { multiaddr } => self.on_connect_relay(multiaddr, tx).await,
             PProxyCommand::SendConnectCommand {
                 peer_id,
                 tunnel_id,
@@ -321,25 +321,27 @@ impl PProxy {
 
     async fn on_add_peer(
         &mut self,
-        addr: Multiaddr,
+        multiaddr: Multiaddr,
         peer_id: PeerId,
         tx: CommandNotifier,
     ) -> Result<()> {
-        self.swarm.add_peer_address(peer_id, addr);
+        self.swarm.add_peer_address(peer_id, multiaddr);
 
         tx.send(Ok(PProxyCommandResponse::AddPeer { peer_id }))
             .map_err(|_| Error::EssentialTaskClosed)
     }
 
-    async fn on_connect_relay(&mut self, address: Multiaddr, tx: CommandNotifier) -> Result<()> {
-        let relaied_address = address
-            .with(multiaddr::Protocol::P2pCircuit)
-            .with(multiaddr::Protocol::P2p(*self.swarm.local_peer_id()));
+    async fn on_connect_relay(&mut self, multiaddr: Multiaddr, tx: CommandNotifier) -> Result<()> {
+        let relaied_multiaddr = multiaddr
+            .with(Protocol::P2pCircuit)
+            .with(Protocol::P2p(*self.swarm.local_peer_id()));
 
-        self.swarm.listen_on(relaied_address.clone())?;
+        self.swarm.listen_on(relaied_multiaddr.clone())?;
 
-        tx.send(Ok(PProxyCommandResponse::ConnectRelay { relaied_address }))
-            .map_err(|_| Error::EssentialTaskClosed)
+        tx.send(Ok(PProxyCommandResponse::ConnectRelay {
+            relaied_multiaddr,
+        }))
+        .map_err(|_| Error::EssentialTaskClosed)
     }
 
     async fn on_send_connect_command(
@@ -396,13 +398,13 @@ impl PProxyHandle {
     pub async fn add_peer(&self, request: AddPeerRequest) -> Result<AddPeerResponse> {
         let (tx, rx) = oneshot::channel();
 
-        let address: Multiaddr = request
-            .address
+        let multiaddr: Multiaddr = request
+            .multiaddr
             .parse()
-            .map_err(|_| Error::MultiaddrParseError(request.address.clone()))?;
+            .map_err(|_| Error::MultiaddrParseError(request.multiaddr.clone()))?;
 
         let peer_id = request.peer_id.map_or_else(
-            || extract_peer_id_from_multiaddr(&address),
+            || extract_peer_id_from_multiaddr(&multiaddr),
             |peer_id| {
                 peer_id
                     .parse()
@@ -411,7 +413,7 @@ impl PProxyHandle {
         )?;
 
         self.command_tx
-            .send((PProxyCommand::AddPeer { address, peer_id }, tx))
+            .send((PProxyCommand::AddPeer { multiaddr, peer_id }, tx))
             .await?;
 
         let response = rx.await??;
@@ -462,20 +464,20 @@ impl PProxyHandle {
     ) -> Result<ConnectRelayResponse> {
         let (tx, rx) = oneshot::channel();
 
-        let address: Multiaddr = request
-            .address
+        let multiaddr: Multiaddr = request
+            .multiaddr
             .parse()
-            .map_err(|_| Error::MultiaddrParseError(request.address.clone()))?;
+            .map_err(|_| Error::MultiaddrParseError(request.multiaddr.clone()))?;
 
         self.command_tx
-            .send((PProxyCommand::ConnectRelay { address }, tx))
+            .send((PProxyCommand::ConnectRelay { multiaddr }, tx))
             .await?;
 
         let response = rx.await??;
 
         match response {
-            PProxyCommandResponse::ConnectRelay { relaied_address } => Ok(ConnectRelayResponse {
-                relaied_address: relaied_address.to_string(),
+            PProxyCommandResponse::ConnectRelay { relaied_multiaddr } => Ok(ConnectRelayResponse {
+                relaied_multiaddr: relaied_multiaddr.to_string(),
             }),
             _ => Err(Error::UnexpectedResponseType),
         }
@@ -485,7 +487,7 @@ impl PProxyHandle {
 fn extract_peer_id_from_multiaddr(multiaddr: &Multiaddr) -> Result<PeerId> {
     let protocol = multiaddr.iter().last();
 
-    let Some(multiaddr::Protocol::P2p(peer_id)) = protocol else {
+    let Some(Protocol::P2p(peer_id)) = protocol else {
         return Err(Error::FailedToExtractPeerIdFromMultiaddr(
             multiaddr.to_string(),
         ));

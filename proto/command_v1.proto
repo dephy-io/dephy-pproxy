@@ -2,7 +2,7 @@ syntax = "proto3";
 package command.v1;
 
 message AddPeerRequest {
-  string address = 1;
+  string multiaddr = 1;
   optional string peer_id = 2;
 }
 
@@ -21,11 +21,11 @@ message CreateTunnelServerResponse {
 }
 
 message ConnectRelayRequest {
-  string address = 1;
+  string multiaddr = 1;
 }
 
 message ConnectRelayResponse {
-  string relaied_address = 1;
+  string relaied_multiaddr = 1;
 }
 
 service CommandService {

@@ -6,6 +6,7 @@ use clap::ArgMatches;
 use clap::Command;
 use dephy_pproxy::command::proto::command_service_client::CommandServiceClient;
 use dephy_pproxy::command::proto::AddPeerRequest;
+use dephy_pproxy::command::proto::ConnectRelayRequest;
 use dephy_pproxy::command::proto::CreateTunnelServerRequest;
 use dephy_pproxy::command::PProxyCommander;
 use dephy_pproxy::PProxy;
@@ -66,7 +67,7 @@ fn parse_args() -> Command {
                 .long("tunnel-server-addr")
                 .num_args(1)
                 .action(ArgAction::Set)
-                .help("Tunnel server address, if not set a random port will be used"),
+                .help("Tunnel server address. If not set, a random port will be used"),
         )
         .arg(
             Arg::new("PEER_MULTIADDR")
@@ -77,10 +78,30 @@ fn parse_args() -> Command {
                 .help("The multiaddr of the remote peer"),
         );
 
+    let connect_relay = Command::new("connect_relay")
+        .about("Connect to a relay server")
+        .arg(
+            Arg::new("COMMANDER_SERVER_ADDR")
+                .long("commander-server-addr")
+                .num_args(1)
+                .default_value("127.0.0.1:10086")
+                .action(ArgAction::Set)
+                .help("Commander server address"),
+        )
+        .arg(
+            Arg::new("RELAY_MULTIADDR")
+                .long("relay-multiaddr")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .required(true)
+                .help("Relay server multiaddr"),
+        );
+
     app = app
         .arg_required_else_help(true)
         .subcommand(serve)
-        .subcommand(create_tunnel_server);
+        .subcommand(create_tunnel_server)
+        .subcommand(connect_relay);
 
     app
 }
@@ -151,7 +172,7 @@ async fn create_tunnel_server(args: &ArgMatches) {
         .get_one::<String>("PEER_MULTIADDR")
         .unwrap()
         .parse::<Multiaddr>()
-        .expect("Missing peer multiaddr");
+        .expect("Invalid peer multiaddr");
 
     let mut client = CommandServiceClient::connect(format!("http://{}", commander_server_addr))
         .await
@@ -159,7 +180,7 @@ async fn create_tunnel_server(args: &ArgMatches) {
 
     let pp_response = client
         .add_peer(AddPeerRequest {
-            address: peer_multiaddr.to_string(),
+            multiaddr: peer_multiaddr.to_string(),
             peer_id: None,
         })
         .await
@@ -180,6 +201,33 @@ async fn create_tunnel_server(args: &ArgMatches) {
     println!("tunnel_server_addr: {}", pp_response.address);
 }
 
+async fn connect_relay(args: &ArgMatches) {
+    let commander_server_addr = args
+        .get_one::<String>("COMMANDER_SERVER_ADDR")
+        .unwrap()
+        .parse::<SocketAddr>()
+        .expect("Invalid command server address");
+    let relay_multiaddr = args
+        .get_one::<String>("RELAY_MULTIADDR")
+        .unwrap()
+        .parse::<Multiaddr>()
+        .expect("Invalid relay multiaddr");
+
+    let mut client = CommandServiceClient::connect(format!("http://{}", commander_server_addr))
+        .await
+        .expect("Connect to commander server failed");
+
+    let pp_response = client
+        .connect_relay(ConnectRelayRequest {
+            multiaddr: relay_multiaddr.to_string(),
+        })
+        .await
+        .expect("Connect relay failed")
+        .into_inner();
+
+    println!("relaied_multiaddr: {}", pp_response.relaied_multiaddr);
+}
+
 #[tokio::main]
 async fn main() {
     let _ = tracing_subscriber::fmt()
@@ -194,6 +242,9 @@ async fn main() {
         }
         Some(("create_tunnel_server", args)) => {
             create_tunnel_server(args).await;
+        }
+        Some(("connect_relay", args)) => {
+            connect_relay(args).await;
         }
         _ => unreachable!(),
     }
