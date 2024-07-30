@@ -17,6 +17,8 @@ use tokio::sync::mpsc;
 
 use crate::command::proto::AddPeerRequest;
 use crate::command::proto::AddPeerResponse;
+use crate::command::proto::ConnectRelayRequest;
+use crate::command::proto::ConnectRelayResponse;
 use crate::command::proto::CreateTunnelServerRequest;
 use crate::command::proto::CreateTunnelServerResponse;
 use crate::p2p::PProxyNetworkBehaviour;
@@ -59,6 +61,9 @@ pub enum PProxyCommand {
         address: Multiaddr,
         peer_id: PeerId,
     },
+    ConnectRelay {
+        address: Multiaddr,
+    },
     SendConnectCommand {
         peer_id: PeerId,
         tunnel_id: TunnelId,
@@ -73,6 +78,7 @@ pub enum PProxyCommand {
 
 pub enum PProxyCommandResponse {
     AddPeer { peer_id: PeerId },
+    ConnectRelay { relaied_address: Multiaddr },
     SendConnectCommand {},
     SendOutboundPackageCommand {},
 }
@@ -293,6 +299,7 @@ impl PProxy {
             PProxyCommand::AddPeer { address, peer_id } => {
                 self.on_add_peer(address, peer_id, tx).await
             }
+            PProxyCommand::ConnectRelay { address } => self.on_connect_relay(address, tx).await,
             PProxyCommand::SendConnectCommand {
                 peer_id,
                 tunnel_id,
@@ -321,6 +328,17 @@ impl PProxy {
         self.swarm.add_peer_address(peer_id, addr);
 
         tx.send(Ok(PProxyCommandResponse::AddPeer { peer_id }))
+            .map_err(|_| Error::EssentialTaskClosed)
+    }
+
+    async fn on_connect_relay(&mut self, address: Multiaddr, tx: CommandNotifier) -> Result<()> {
+        let relaied_address = address
+            .with(multiaddr::Protocol::P2pCircuit)
+            .with(multiaddr::Protocol::P2p(*self.swarm.local_peer_id()));
+
+        self.swarm.listen_on(relaied_address.clone())?;
+
+        tx.send(Ok(PProxyCommandResponse::ConnectRelay { relaied_address }))
             .map_err(|_| Error::EssentialTaskClosed)
     }
 
@@ -436,6 +454,31 @@ impl PProxyHandle {
             peer_id: peer_id.to_string(),
             address: address.to_string(),
         })
+    }
+
+    pub async fn connect_relay(
+        &self,
+        request: ConnectRelayRequest,
+    ) -> Result<ConnectRelayResponse> {
+        let (tx, rx) = oneshot::channel();
+
+        let address: Multiaddr = request
+            .address
+            .parse()
+            .map_err(|_| Error::MultiaddrParseError(request.address.clone()))?;
+
+        self.command_tx
+            .send((PProxyCommand::ConnectRelay { address }, tx))
+            .await?;
+
+        let response = rx.await??;
+
+        match response {
+            PProxyCommandResponse::ConnectRelay { relaied_address } => Ok(ConnectRelayResponse {
+                relaied_address: relaied_address.to_string(),
+            }),
+            _ => Err(Error::UnexpectedResponseType),
+        }
     }
 }
 

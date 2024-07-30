@@ -17,6 +17,8 @@ pub enum Error {
     EssentialTaskClosed,
     #[error("Libp2p swarm create error: {0}")]
     Libp2pSwarmCreateError(String),
+    #[error("Libp2p transport error: {0}")]
+    Libp2pTransportError(#[from] libp2p::core::transport::TransportError<std::io::Error>),
     #[error("Protocol not support: {0}")]
     ProtocolNotSupport(String),
     #[error("Unexpected response type")]

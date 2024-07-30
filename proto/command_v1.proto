@@ -20,7 +20,16 @@ message CreateTunnelServerResponse {
   string address = 2;
 }
 
+message ConnectRelayRequest {
+  string address = 1;
+}
+
+message ConnectRelayResponse {
+  string relaied_address = 1;
+}
+
 service CommandService {
   rpc AddPeer(AddPeerRequest) returns (AddPeerResponse);
   rpc CreateTunnelServer(CreateTunnelServerRequest) returns (CreateTunnelServerResponse);
+  rpc ConnectRelay(ConnectRelayRequest) returns (ConnectRelayResponse);
 }
