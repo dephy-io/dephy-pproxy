@@ -42,7 +42,7 @@ repos:
         description: Check cargo dependencies
         entry: bash -c 'cargo deny check -d'
         language: rust
-        files: \.rs$
+        files: \.*$
       - id: typos
         name: typos
         description: check typo
