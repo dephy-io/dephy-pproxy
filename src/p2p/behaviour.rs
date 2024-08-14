@@ -10,10 +10,11 @@ use crate::p2p::codec::Codec;
 pub(crate) struct PProxyNetworkBehaviour {
     pub(crate) request_response: request_response::Behaviour<Codec>,
     pub(crate) relay: relay::Behaviour,
+    pub(crate) relay_client: relay::client::Behaviour,
 }
 
 impl PProxyNetworkBehaviour {
-    pub fn new(key: &Keypair) -> Self {
+    pub fn new(key: &Keypair, relay_client: relay::client::Behaviour) -> Self {
         let request_response = request_response::Behaviour::new(
             [(
                 StreamProtocol::new("/pproxy/1.0.0"),
@@ -25,6 +26,7 @@ impl PProxyNetworkBehaviour {
         Self {
             request_response,
             relay,
+            relay_client,
         }
     }
 }

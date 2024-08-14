@@ -31,6 +31,7 @@ pub(crate) fn new_swarm(
             noise::Config::new,
             yamux::Config::default,
         )?
+        .with_relay_client(noise::Config::new, yamux::Config::default)?
         .with_behaviour(PProxyNetworkBehaviour::new)?
         .with_swarm_config(|c| c.with_idle_connection_timeout(std::time::Duration::from_secs(60)))
         .build();
