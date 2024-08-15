@@ -21,7 +21,7 @@ use crate::CommandNotifier;
 use crate::PProxyCommand;
 
 pub mod proto {
-    tonic::include_proto!("tunnel.v1");
+    tonic::include_proto!("org.dephy.pproxy.tunnel.v1");
 }
 
 pub struct TunnelServer {

@@ -10,6 +10,8 @@ futures = "0.3.30"
 hex = "0.4.3"
 libp2p = { version = "0.53.2", features = ["tokio", "macros", "yamux", "noise", "tcp", "request-response", "relay"] }
 prost = "0.13.1"
+reqwest = { version = "0.12.5", features = ["json", "rustls-tls"] }
+serde = { version = "1.0.207", features = ["derive"] }
 thiserror = "1.0.60"
 tokio = { version = "1.37.0", features = ["rt-multi-thread"] }
 tokio-util = "0.7.11"

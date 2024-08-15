@@ -5,7 +5,7 @@ use tonic::Status;
 use crate::PProxyHandle;
 
 pub mod proto {
-    tonic::include_proto!("command.v1");
+    tonic::include_proto!("org.dephy.pproxy.command.v1");
 }
 
 pub struct PProxyCommander {

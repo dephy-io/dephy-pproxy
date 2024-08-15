@@ -1,5 +1,5 @@
 syntax = "proto3";
-package command.v1;
+package org.dephy.pproxy.command.v1;
 
 message AddPeerRequest {
   string multiaddr = 1;
