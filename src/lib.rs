@@ -15,6 +15,7 @@ use libp2p::PeerId;
 use libp2p::Swarm;
 use tokio::sync::mpsc;
 
+use crate::auth::AuthClient;
 use crate::command::proto::AddPeerRequest;
 use crate::command::proto::AddPeerResponse;
 use crate::command::proto::ConnectRelayRequest;
@@ -29,7 +30,7 @@ use crate::tunnel::Tunnel;
 use crate::tunnel::TunnelServer;
 use crate::types::*;
 
-pub mod auth;
+mod auth;
 pub mod command;
 pub mod error;
 mod p2p;
@@ -91,6 +92,7 @@ pub struct PProxy {
     outbound_ready_notifiers: HashMap<request_response::OutboundRequestId, CommandNotifier>,
     inbound_tunnels: HashMap<(PeerId, TunnelId), Tunnel>,
     tunnel_txs: HashMap<(PeerId, TunnelId), mpsc::Sender<Vec<u8>>>,
+    auth_client: Option<AuthClient>,
 }
 
 pub struct PProxyHandle {
@@ -104,10 +106,13 @@ impl PProxy {
         keypair: Keypair,
         listen_addr: SocketAddr,
         proxy_addr: Option<SocketAddr>,
+        auth_server_endpoint: Option<reqwest::Url>,
     ) -> Result<(Self, PProxyHandle)> {
         let (command_tx, command_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let swarm = crate::p2p::new_swarm(keypair, listen_addr)
             .map_err(|e| Error::Libp2pSwarmCreateError(e.to_string()))?;
+        let auth_client =
+            auth_server_endpoint.map(|endpoint| AuthClient::new(*swarm.local_peer_id(), endpoint));
 
         Ok((
             Self {
@@ -118,6 +123,7 @@ impl PProxy {
                 outbound_ready_notifiers: HashMap::new(),
                 inbound_tunnels: HashMap::new(),
                 tunnel_txs: HashMap::new(),
+                auth_client,
             },
             PProxyHandle {
                 command_tx,
@@ -181,6 +187,13 @@ impl PProxy {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
+                    if let Some(auth_client) = &mut self.auth_client {
+                        if !auth_client.is_valid(&peer.to_string()).await? {
+                            // TODO: Manage tunnel lifecycle
+                            return Err(Error::Tunnel(error::TunnelError::ConnectionClosed));
+                        }
+                    }
+
                     match request.command() {
                         proto::TunnelCommand::Connect => {
                             tracing::info!("received connect command from peer: {:?}", peer);

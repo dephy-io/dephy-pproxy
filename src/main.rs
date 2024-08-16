@@ -12,6 +12,7 @@ use dephy_pproxy::command::PProxyCommander;
 use dephy_pproxy::PProxy;
 use libp2p::identity;
 use libp2p::Multiaddr;
+use reqwest::Url;
 use tonic::transport::Server;
 
 fn parse_args() -> Command {
@@ -34,7 +35,7 @@ fn parse_args() -> Command {
                 .num_args(1)
                 .default_value("127.0.0.1:10010")
                 .action(ArgAction::Set)
-                .help("Server address"),
+                .help("Server address. Will serve a pproxy server on this address"),
         )
         .arg(
             Arg::new("COMMANDER_SERVER_ADDR")
@@ -42,14 +43,21 @@ fn parse_args() -> Command {
                 .num_args(1)
                 .default_value("127.0.0.1:10086")
                 .action(ArgAction::Set)
-                .help("Commander server address"),
+                .help("Commander server address. Will serve a commander server on this address"),
         )
         .arg(
             Arg::new("PROXY_ADDR")
                 .long("proxy-addr")
                 .num_args(1)
                 .action(ArgAction::Set)
-                .help("Will reverse proxy this address if set"),
+                .help("Will reverse proxy this address via tunnel protocol if set"),
+        )
+        .arg(
+            Arg::new("AUTH_SERVER_ENDPOINT")
+                .long("auth-server-endpoint")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .help("Authentication server endpoint is used to verify if one peer can access another. If not set, all access is allowed."),
         );
 
     let create_tunnel_server = Command::new("create_tunnel_server")
@@ -60,7 +68,7 @@ fn parse_args() -> Command {
                 .num_args(1)
                 .default_value("127.0.0.1:10086")
                 .action(ArgAction::Set)
-                .help("Commander server address"),
+                .help("Commander server address. Use it to control the existed pproxy server."),
         )
         .arg(
             Arg::new("TUNNEL_SERVER_ADDR")
@@ -75,7 +83,7 @@ fn parse_args() -> Command {
                 .num_args(1)
                 .action(ArgAction::Set)
                 .required(true)
-                .help("The multiaddr of the remote peer"),
+                .help("The multiaddr of remote peer"),
         );
 
     let connect_relay = Command::new("connect_relay")
@@ -86,7 +94,7 @@ fn parse_args() -> Command {
                 .num_args(1)
                 .default_value("127.0.0.1:10086")
                 .action(ArgAction::Set)
-                .help("Commander server address"),
+                .help("Commander server address. Use it to control the existed pproxy server."),
         )
         .arg(
             Arg::new("RELAY_MULTIADDR")
@@ -94,7 +102,7 @@ fn parse_args() -> Command {
                 .num_args(1)
                 .action(ArgAction::Set)
                 .required(true)
-                .help("Relay server multiaddr"),
+                .help("The multiaddr of relay server"),
         );
 
     app = app
@@ -131,6 +139,9 @@ async fn serve(args: &ArgMatches) {
     let proxy_addr = args
         .get_one::<String>("PROXY_ADDR")
         .map(|addr| addr.parse().expect("Invalid proxy address"));
+    let auth_server_endpoint = args
+        .get_one::<String>("AUTH_SERVER_ENDPOINT")
+        .map(|endpoint| Url::parse(endpoint).expect("Invalid authentication server endpoint"));
 
     println!("server_addr: {}", server_addr);
     println!("commander_server_addr: {}", commander_server_addr);
@@ -139,6 +150,7 @@ async fn serve(args: &ArgMatches) {
         identity::ed25519::Keypair::from(key).into(),
         server_addr,
         proxy_addr,
+        auth_server_endpoint,
     )
     .expect("Create pproxy failed");
 
