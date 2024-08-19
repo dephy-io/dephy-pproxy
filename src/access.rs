@@ -33,7 +33,7 @@ impl AccessClient {
         let url = self.endpoint.join("access-control").unwrap();
         let params = [
             ("device", self.local_id.to_string()),
-            ("token", peer.to_string()),
+            ("user", peer.to_string()),
         ];
 
         let response = self
@@ -42,6 +42,7 @@ impl AccessClient {
             .query(&params)
             .send()
             .await?
+            .error_for_status()?
             .json::<AccessClientResponse>()
             .await?;
 
