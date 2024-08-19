@@ -63,4 +63,17 @@ impl proto::command_service_server::CommandService for PProxyCommander {
             .map(Response::new)
             .map_err(|e| tonic::Status::internal(format!("{:?}", e)))
     }
+
+    async fn expire_peer_access(
+        &self,
+        request: tonic::Request<proto::ExpirePeerAccessRequest>,
+    ) -> std::result::Result<tonic::Response<proto::ExpirePeerAccessResponse>, tonic::Status> {
+        tracing::debug!("handle request: {:?}", request);
+
+        self.handle
+            .expire_peer_access(request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(|e| tonic::Status::internal(format!("{:?}", e)))
+    }
 }

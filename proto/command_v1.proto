@@ -28,8 +28,15 @@ message ConnectRelayResponse {
   string relaied_multiaddr = 1;
 }
 
+message ExpirePeerAccessRequest {
+  string peer_id = 1;
+}
+
+message ExpirePeerAccessResponse {}
+
 service CommandService {
   rpc AddPeer(AddPeerRequest) returns (AddPeerResponse);
   rpc CreateTunnelServer(CreateTunnelServerRequest) returns (CreateTunnelServerResponse);
   rpc ConnectRelay(ConnectRelayRequest) returns (ConnectRelayResponse);
+  rpc ExpirePeerAccess(ExpirePeerAccessRequest) returns (ExpirePeerAccessResponse);
 }

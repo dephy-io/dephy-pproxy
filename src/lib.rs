@@ -15,13 +15,15 @@ use libp2p::PeerId;
 use libp2p::Swarm;
 use tokio::sync::mpsc;
 
-use crate::auth::AuthClient;
+use crate::access::AccessClient;
 use crate::command::proto::AddPeerRequest;
 use crate::command::proto::AddPeerResponse;
 use crate::command::proto::ConnectRelayRequest;
 use crate::command::proto::ConnectRelayResponse;
 use crate::command::proto::CreateTunnelServerRequest;
 use crate::command::proto::CreateTunnelServerResponse;
+use crate::command::proto::ExpirePeerAccessRequest;
+use crate::command::proto::ExpirePeerAccessResponse;
 use crate::p2p::PProxyNetworkBehaviour;
 use crate::p2p::PProxyNetworkBehaviourEvent;
 use crate::tunnel::proto;
@@ -30,7 +32,7 @@ use crate::tunnel::Tunnel;
 use crate::tunnel::TunnelServer;
 use crate::types::*;
 
-mod auth;
+mod access;
 pub mod command;
 pub mod error;
 mod p2p;
@@ -75,6 +77,9 @@ pub enum PProxyCommand {
         tunnel_id: TunnelId,
         data: Vec<u8>,
     },
+    ExpirePeerAccess {
+        peer_id: PeerId,
+    },
 }
 
 pub enum PProxyCommandResponse {
@@ -82,6 +87,7 @@ pub enum PProxyCommandResponse {
     ConnectRelay { relaied_multiaddr: Multiaddr },
     SendConnectCommand {},
     SendOutboundPackageCommand {},
+    ExpirePeerAccess {},
 }
 
 pub struct PProxy {
@@ -92,7 +98,7 @@ pub struct PProxy {
     outbound_ready_notifiers: HashMap<request_response::OutboundRequestId, CommandNotifier>,
     inbound_tunnels: HashMap<(PeerId, TunnelId), Tunnel>,
     tunnel_txs: HashMap<(PeerId, TunnelId), mpsc::Sender<Vec<u8>>>,
-    auth_client: Option<AuthClient>,
+    access_client: Option<AccessClient>,
 }
 
 pub struct PProxyHandle {
@@ -106,13 +112,13 @@ impl PProxy {
         keypair: Keypair,
         listen_addr: SocketAddr,
         proxy_addr: Option<SocketAddr>,
-        auth_server_endpoint: Option<reqwest::Url>,
+        access_server_endpoint: Option<reqwest::Url>,
     ) -> Result<(Self, PProxyHandle)> {
         let (command_tx, command_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let swarm = crate::p2p::new_swarm(keypair, listen_addr)
             .map_err(|e| Error::Libp2pSwarmCreateError(e.to_string()))?;
-        let auth_client =
-            auth_server_endpoint.map(|endpoint| AuthClient::new(*swarm.local_peer_id(), endpoint));
+        let access_client = access_server_endpoint
+            .map(|endpoint| AccessClient::new(*swarm.local_peer_id(), endpoint));
 
         Ok((
             Self {
@@ -123,7 +129,7 @@ impl PProxy {
                 outbound_ready_notifiers: HashMap::new(),
                 inbound_tunnels: HashMap::new(),
                 tunnel_txs: HashMap::new(),
-                auth_client,
+                access_client,
             },
             PProxyHandle {
                 command_tx,
@@ -187,8 +193,8 @@ impl PProxy {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    if let Some(auth_client) = &mut self.auth_client {
-                        if !auth_client.is_valid(&peer.to_string()).await? {
+                    if let Some(ac) = &mut self.access_client {
+                        if !ac.is_valid(&peer).await {
                             // TODO: Manage tunnel lifecycle
                             return Err(Error::Tunnel(error::TunnelError::ConnectionClosed));
                         }
@@ -329,6 +335,9 @@ impl PProxy {
                 self.on_send_outbound_package_command(peer_id, tunnel_id, data, tx)
                     .await
             }
+            PProxyCommand::ExpirePeerAccess { peer_id } => {
+                self.on_expire_peer_access(peer_id, tx).await
+            }
         }
     }
 
@@ -404,6 +413,17 @@ impl PProxy {
 
         tx.send(Ok(PProxyCommandResponse::SendOutboundPackageCommand {}))
             .map_err(|_| Error::EssentialTaskClosed)
+    }
+
+    async fn on_expire_peer_access(&mut self, peer_id: PeerId, tx: CommandNotifier) -> Result<()> {
+        if let Some(ref mut ac) = self.access_client {
+            ac.expire(&peer_id);
+        }
+
+        tx.send(Ok(PProxyCommandResponse::ExpirePeerAccess {}))
+            .map_err(|_| Error::EssentialTaskClosed)?;
+
+        Ok(())
     }
 }
 
@@ -494,6 +514,26 @@ impl PProxyHandle {
             }),
             _ => Err(Error::UnexpectedResponseType),
         }
+    }
+
+    pub async fn expire_peer_access(
+        &self,
+        request: ExpirePeerAccessRequest,
+    ) -> Result<ExpirePeerAccessResponse> {
+        let (tx, rx) = oneshot::channel();
+
+        let peer_id = request
+            .peer_id
+            .parse()
+            .map_err(|_| Error::PeerIdParseError(request.peer_id))?;
+
+        self.command_tx
+            .send((PProxyCommand::ExpirePeerAccess { peer_id }, tx))
+            .await?;
+
+        rx.await??;
+
+        Ok(ExpirePeerAccessResponse {})
     }
 }
 

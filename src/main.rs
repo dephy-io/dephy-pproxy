@@ -53,11 +53,11 @@ fn parse_args() -> Command {
                 .help("Will reverse proxy this address via tunnel protocol if set"),
         )
         .arg(
-            Arg::new("AUTH_SERVER_ENDPOINT")
-                .long("auth-server-endpoint")
+            Arg::new("ACCESS_SERVER_ENDPOINT")
+                .long("access-server-endpoint")
                 .num_args(1)
                 .action(ArgAction::Set)
-                .help("Authentication server endpoint is used to verify if one peer can access another. If not set, all access is allowed."),
+                .help("Access server endpoint is used to verify if one peer can access another. If not set, all access is allowed."),
         );
 
     let create_tunnel_server = Command::new("create_tunnel_server")
@@ -139,9 +139,9 @@ async fn serve(args: &ArgMatches) {
     let proxy_addr = args
         .get_one::<String>("PROXY_ADDR")
         .map(|addr| addr.parse().expect("Invalid proxy address"));
-    let auth_server_endpoint = args
-        .get_one::<String>("AUTH_SERVER_ENDPOINT")
-        .map(|endpoint| Url::parse(endpoint).expect("Invalid authentication server endpoint"));
+    let access_server_endpoint = args
+        .get_one::<String>("ACCESS_SERVER_ENDPOINT")
+        .map(|endpoint| Url::parse(endpoint).expect("Invalid access server endpoint"));
 
     println!("server_addr: {}", server_addr);
     println!("commander_server_addr: {}", commander_server_addr);
@@ -150,7 +150,7 @@ async fn serve(args: &ArgMatches) {
         identity::ed25519::Keypair::from(key).into(),
         server_addr,
         proxy_addr,
-        auth_server_endpoint,
+        access_server_endpoint,
     )
     .expect("Create pproxy failed");
 
