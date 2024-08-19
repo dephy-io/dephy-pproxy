@@ -27,7 +27,7 @@ fn parse_args() -> Command {
                 .long("key")
                 .num_args(1)
                 .action(ArgAction::Set)
-                .help("Ed25519 key. If not set, a random key will be generated"),
+                .help("Secp256k1 key. If not set, a random key will be generated"),
         )
         .arg(
             Arg::new("SERVER_ADDR")
@@ -118,12 +118,12 @@ async fn serve(args: &ArgMatches) {
     let key = args
         .get_one::<String>("KEY")
         .map(|key| {
-            identity::ed25519::SecretKey::try_from_bytes(hex::decode(key).expect("Invalid key"))
+            identity::secp256k1::SecretKey::try_from_bytes(hex::decode(key).expect("Invalid key"))
                 .expect("Invalid key")
         })
         .unwrap_or_else(|| {
-            let key = identity::ed25519::SecretKey::generate();
-            println!("Generated key: {}", hex::encode(&key));
+            let key = identity::secp256k1::SecretKey::generate();
+            println!("Generated key: {}", hex::encode(key.to_bytes()));
             key
         });
     let server_addr = args
@@ -147,7 +147,7 @@ async fn serve(args: &ArgMatches) {
     println!("commander_server_addr: {}", commander_server_addr);
 
     let (pproxy, pproxy_handle) = PProxy::new(
-        identity::ed25519::Keypair::from(key).into(),
+        identity::secp256k1::Keypair::from(key).into(),
         server_addr,
         proxy_addr,
         access_server_endpoint,
