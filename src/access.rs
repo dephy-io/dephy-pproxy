@@ -28,7 +28,7 @@ impl AccessClient {
     }
 
     async fn request_endpoint(&mut self, peer: &PeerId) -> Result<bool, reqwest::Error> {
-        let url = self.endpoint.join("access-control").unwrap();
+        let url = self.endpoint.join("access").unwrap();
         let params = [("peer_id", peer.to_string())];
 
         let response = self
