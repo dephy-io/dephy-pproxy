@@ -262,6 +262,11 @@ impl PProxy {
                 println!("Local node is listening on {address}");
             }
 
+            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                self.inbound_tunnels.retain(|(p, _), _| p != &peer_id);
+                self.tunnel_txs.retain(|(p, _), _| p != &peer_id);
+            }
+
             SwarmEvent::Behaviour(PProxyNetworkBehaviourEvent::RequestResponse(
                 request_response::Event::Message { peer, message },
             )) => match message {
@@ -271,11 +276,17 @@ impl PProxy {
                     let tunnel_id = request.tunnel_id.clone();
                     let resp = match self.handle_tunnel_request(peer, request).await {
                         Ok(resp) => resp,
-                        Err(e) => Some(proto::Tunnel {
-                            tunnel_id,
-                            command: proto::TunnelCommand::Break.into(),
-                            data: Some(e.to_string().as_bytes().to_vec()),
-                        }),
+                        Err(e) => {
+                            if let Ok(tunnel_id) = tunnel_id.parse() {
+                                self.inbound_tunnels.remove(&(peer, tunnel_id));
+                                self.tunnel_txs.remove(&(peer, tunnel_id));
+                            }
+                            Some(proto::Tunnel {
+                                tunnel_id,
+                                command: proto::TunnelCommand::Break.into(),
+                                data: Some(e.to_string().as_bytes().to_vec()),
+                            })
+                        }
                     };
 
                     self.swarm
@@ -324,8 +335,7 @@ impl PProxy {
                             // Terminat connecting tunnel
                             if let Some(tx) = self.outbound_ready_notifiers.remove(&request_id) {
                                 tx.send(Err(Error::Tunnel(TunnelError::ConnectionAborted)))
-                                    .map_err(|_| Error::EssentialTaskClosed)?;
-                                return Ok(());
+                                    .map_err(|_| Error::EssentialTaskClosed)?
                             }
 
                             // Terminat connected tunnel
@@ -354,7 +364,7 @@ impl PProxy {
                         .map_err(|_| Error::EssentialTaskClosed)?
                 }
 
-                // TODO: Should tell tunnel sent failed
+                // TODO: Should also tell tunnel sent failed. But cannot get tunnel_id here.
             }
 
             _ => {}
