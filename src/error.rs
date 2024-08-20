@@ -33,6 +33,8 @@ pub enum Error {
     Tunnel(TunnelError),
     #[error("Protobuf decode error: {0}")]
     ProtobufDecode(#[from] prost::DecodeError),
+    #[error("Access denied, peer: {0}")]
+    AccessDenied(String),
 }
 
 /// A list specifying general categories of Tunnel error like [std::io::ErrorKind].

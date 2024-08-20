@@ -52,7 +52,7 @@ pub struct TunnelListener {
     peer_id: PeerId,
     tunnel_id: TunnelId,
     local_stream: TcpStream,
-    remote_stream_rx: mpsc::Receiver<Vec<u8>>,
+    remote_stream_rx: mpsc::Receiver<Result<Vec<u8>, TunnelError>>,
     pproxy_command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
     cancel_token: CancellationToken,
 }
@@ -225,7 +225,7 @@ impl Tunnel {
     pub async fn listen(
         &mut self,
         local_stream: TcpStream,
-        remote_stream_rx: mpsc::Receiver<Vec<u8>>,
+        remote_stream_rx: mpsc::Receiver<Result<Vec<u8>, TunnelError>>,
     ) -> Result<(), TunnelError> {
         if self.listener.is_some() {
             return Err(TunnelError::AlreadyListened);
@@ -254,7 +254,7 @@ impl TunnelListener {
         peer_id: PeerId,
         tunnel_id: TunnelId,
         local_stream: TcpStream,
-        remote_stream_rx: mpsc::Receiver<Vec<u8>>,
+        remote_stream_rx: mpsc::Receiver<Result<Vec<u8>, TunnelError>>,
         pproxy_command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
     ) -> Self {
         Self {
@@ -324,11 +324,20 @@ impl TunnelListener {
                     break TunnelError::ConnectionClosed;
                 }
 
-                if let Some(body) = self.remote_stream_rx.recv().await {
-                    tracing::debug!("Received {} bytes from local stream", body.len());
-                    if let Err(e) = local_write.write_all(&body).await {
-                        tracing::error!("Write to local stream failed: {e:?}");
-                        break e.kind().into();
+                let Some(data) = self.remote_stream_rx.recv().await else {
+                    break TunnelError::ConnectionClosed;
+                };
+
+                match data {
+                    Err(e) => {
+                        break e;
+                    }
+                    Ok(body) => {
+                        tracing::debug!("Received {} bytes from local stream", body.len());
+                        if let Err(e) = local_write.write_all(&body).await {
+                            tracing::error!("Write to local stream failed: {e:?}");
+                            break e.kind().into();
+                        }
                     }
                 }
             }

@@ -6,6 +6,7 @@ enum TunnelCommand {
   TUNNEL_COMMAND_CONNECT = 1;
   TUNNEL_COMMAND_CONNECT_RESP = 2;
   TUNNEL_COMMAND_PACKAGE = 3;
+  TUNNEL_COMMAND_BREAK = 4;
 }
 
 message Tunnel {

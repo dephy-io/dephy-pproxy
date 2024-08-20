@@ -24,6 +24,7 @@ use crate::command::proto::CreateTunnelServerRequest;
 use crate::command::proto::CreateTunnelServerResponse;
 use crate::command::proto::ExpirePeerAccessRequest;
 use crate::command::proto::ExpirePeerAccessResponse;
+use crate::error::TunnelError;
 use crate::p2p::PProxyNetworkBehaviour;
 use crate::p2p::PProxyNetworkBehaviourEvent;
 use crate::tunnel::proto;
@@ -57,6 +58,7 @@ pub type Result<T> = std::result::Result<T, error::Error>;
 
 type CommandNotification = Result<PProxyCommandResponse>;
 type CommandNotifier = oneshot::Sender<CommandNotification>;
+type ChannelPackage = std::result::Result<Vec<u8>, TunnelError>;
 
 #[derive(Debug)]
 pub enum PProxyCommand {
@@ -70,7 +72,7 @@ pub enum PProxyCommand {
     SendConnectCommand {
         peer_id: PeerId,
         tunnel_id: TunnelId,
-        tunnel_tx: mpsc::Sender<Vec<u8>>,
+        tunnel_tx: mpsc::Sender<ChannelPackage>,
     },
     SendOutboundPackageCommand {
         peer_id: PeerId,
@@ -97,7 +99,7 @@ pub struct PProxy {
     proxy_addr: Option<SocketAddr>,
     outbound_ready_notifiers: HashMap<request_response::OutboundRequestId, CommandNotifier>,
     inbound_tunnels: HashMap<(PeerId, TunnelId), Tunnel>,
-    tunnel_txs: HashMap<(PeerId, TunnelId), mpsc::Sender<Vec<u8>>>,
+    tunnel_txs: HashMap<(PeerId, TunnelId), mpsc::Sender<ChannelPackage>>,
     access_client: Option<AccessClient>,
 }
 
@@ -179,89 +181,110 @@ impl PProxy {
         Ok(())
     }
 
+    async fn is_tunnel_valid(&mut self, peer_id: &PeerId) -> bool {
+        let Some(ref mut ac) = self.access_client else {
+            return true;
+        };
+        ac.is_valid(peer_id).await
+    }
+
+    async fn handle_tunnel_request(
+        &mut self,
+        peer_id: PeerId,
+        request: proto::Tunnel,
+    ) -> Result<Option<proto::Tunnel>> {
+        let tunnel_id = request
+            .tunnel_id
+            .parse()
+            .map_err(|_| Error::TunnelIdParseError(request.tunnel_id.clone()))?;
+
+        match request.command() {
+            proto::TunnelCommand::Connect => {
+                tracing::info!("received connect command from peer: {:?}", peer_id);
+                if !self.is_tunnel_valid(&peer_id).await {
+                    return Err(Error::AccessDenied(peer_id.to_string()));
+                }
+
+                let Some(proxy_addr) = self.proxy_addr else {
+                    return Err(Error::ProtocolNotSupport("No proxy_addr".to_string()));
+                };
+
+                let data = match self.dial_tunnel(proxy_addr, peer_id, tunnel_id).await {
+                    Ok(_) => None,
+                    Err(e) => {
+                        tracing::warn!("failed to dial tunnel: {:?}", e);
+                        Some(e.to_string().into_bytes())
+                    }
+                };
+
+                Ok(Some(proto::Tunnel {
+                    tunnel_id: tunnel_id.to_string(),
+                    command: proto::TunnelCommand::ConnectResp.into(),
+                    data,
+                }))
+            }
+
+            proto::TunnelCommand::Package => {
+                // Note that only inbound package need access check.
+                if self.inbound_tunnels.contains_key(&(peer_id, tunnel_id))
+                    && !self.is_tunnel_valid(&peer_id).await
+                {
+                    return Err(Error::AccessDenied(peer_id.to_string()));
+                }
+
+                let Some(tx) = self.tunnel_txs.get(&(peer_id, tunnel_id)) else {
+                    return Err(Error::ProtocolNotSupport(
+                        "No tunnel for Package".to_string(),
+                    ));
+                };
+
+                tx.send(Ok(request.data.unwrap_or_default())).await?;
+
+                // Have to do this to close the response waiter in remote.
+                Ok(None)
+            }
+
+            _ => Err(Error::ProtocolNotSupport(
+                "Wrong tunnel request command".to_string(),
+            )),
+        }
+    }
+
     async fn handle_p2p_server_event(
         &mut self,
         event: SwarmEvent<PProxyNetworkBehaviourEvent>,
     ) -> Result<()> {
         tracing::debug!("received SwarmEvent: {:?}", event);
 
-        #[allow(clippy::single_match)]
         match event {
+            SwarmEvent::NewListenAddr { mut address, .. } => {
+                address.push(Protocol::P2p(*self.swarm.local_peer_id()));
+                println!("Local node is listening on {address}");
+            }
+
             SwarmEvent::Behaviour(PProxyNetworkBehaviourEvent::RequestResponse(
                 request_response::Event::Message { peer, message },
             )) => match message {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    if let Some(ac) = &mut self.access_client {
-                        if !ac.is_valid(&peer).await {
-                            // TODO: Manage tunnel lifecycle
-                            return Err(Error::Tunnel(error::TunnelError::ConnectionClosed));
-                        }
-                    }
+                    let tunnel_id = request.tunnel_id.clone();
+                    let resp = match self.handle_tunnel_request(peer, request).await {
+                        Ok(resp) => resp,
+                        Err(e) => Some(proto::Tunnel {
+                            tunnel_id,
+                            command: proto::TunnelCommand::Break.into(),
+                            data: Some(e.to_string().as_bytes().to_vec()),
+                        }),
+                    };
 
-                    match request.command() {
-                        proto::TunnelCommand::Connect => {
-                            tracing::info!("received connect command from peer: {:?}", peer);
-                            let Some(proxy_addr) = self.proxy_addr else {
-                                return Err(Error::ProtocolNotSupport("No proxy_addr".to_string()));
-                            };
-
-                            let tunnel_id = request
-                                .tunnel_id
-                                .parse()
-                                .map_err(|_| Error::TunnelIdParseError(request.tunnel_id))?;
-
-                            let data = match self.dial_tunnel(proxy_addr, peer, tunnel_id).await {
-                                Ok(_) => None,
-                                Err(e) => {
-                                    tracing::warn!("failed to dial tunnel: {:?}", e);
-                                    Some(e.to_string().into_bytes())
-                                }
-                            };
-
-                            let response = proto::Tunnel {
-                                tunnel_id: tunnel_id.to_string(),
-                                command: proto::TunnelCommand::ConnectResp.into(),
-                                data,
-                            };
-
-                            self.swarm
-                                .behaviour_mut()
-                                .request_response
-                                .send_response(channel, Some(response))
-                                .map_err(|_| Error::EssentialTaskClosed)?;
-                        }
-
-                        proto::TunnelCommand::Package => {
-                            let tunnel_id = request
-                                .tunnel_id
-                                .parse()
-                                .map_err(|_| Error::TunnelIdParseError(request.tunnel_id))?;
-
-                            let Some(tx) = self.tunnel_txs.get(&(peer, tunnel_id)) else {
-                                return Err(Error::ProtocolNotSupport(
-                                    "No tunnel for Package".to_string(),
-                                ));
-                            };
-
-                            tx.send(request.data.unwrap_or_default()).await?;
-
-                            // Have to do this to close the response waiter in remote.
-                            self.swarm
-                                .behaviour_mut()
-                                .request_response
-                                .send_response(channel, None)
-                                .map_err(|_| Error::EssentialTaskClosed)?;
-                        }
-
-                        _ => {
-                            return Err(Error::ProtocolNotSupport(
-                                "Wrong tunnel request command".to_string(),
-                            ));
-                        }
-                    }
+                    self.swarm
+                        .behaviour_mut()
+                        .request_response
+                        .send_response(channel, resp)
+                        .map_err(|_| Error::EssentialTaskClosed)?;
                 }
+
                 request_response::Message::Response {
                     request_id,
                     response,
@@ -278,7 +301,7 @@ impl PProxy {
                                 .remove(&request_id)
                                 .ok_or_else(|| {
                                     Error::TunnelNotWaiting(format!(
-                                        "peer {}, tunnel {}",
+                                        "peer {}, tunnel {} ready but not waiting",
                                         peer, response.tunnel_id
                                     ))
                                 })?;
@@ -293,6 +316,24 @@ impl PProxy {
                             .map_err(|_| Error::EssentialTaskClosed)?;
                         }
 
+                        proto::TunnelCommand::Break => {
+                            let tunnel_id = response.tunnel_id.parse().map_err(|_| {
+                                Error::TunnelIdParseError(response.tunnel_id.clone())
+                            })?;
+
+                            // Terminat connecting tunnel
+                            if let Some(tx) = self.outbound_ready_notifiers.remove(&request_id) {
+                                tx.send(Err(Error::Tunnel(TunnelError::ConnectionAborted)))
+                                    .map_err(|_| Error::EssentialTaskClosed)?;
+                                return Ok(());
+                            }
+
+                            // Terminat connected tunnel
+                            if let Some(tx) = self.tunnel_txs.remove(&(peer, tunnel_id)) {
+                                tx.send(Err(TunnelError::ConnectionAborted)).await?
+                            };
+                        }
+
                         _ => {
                             return Err(Error::ProtocolNotSupport(
                                 "Wrong tunnel response command".to_string(),
@@ -302,9 +343,18 @@ impl PProxy {
                 }
             },
 
-            SwarmEvent::NewListenAddr { mut address, .. } => {
-                address.push(Protocol::P2p(*self.swarm.local_peer_id()));
-                println!("Local node is listening on {address}");
+            SwarmEvent::Behaviour(PProxyNetworkBehaviourEvent::RequestResponse(
+                request_response::Event::OutboundFailure {
+                    request_id, error, ..
+                },
+            )) => {
+                // Tell tunnel dial failed
+                if let Some(tx) = self.outbound_ready_notifiers.remove(&request_id) {
+                    tx.send(Err(Error::TunnelDialFailed(error.to_string())))
+                        .map_err(|_| Error::EssentialTaskClosed)?
+                }
+
+                // TODO: Should tell tunnel sent failed
             }
 
             _ => {}
@@ -370,7 +420,7 @@ impl PProxy {
         &mut self,
         peer_id: PeerId,
         tunnel_id: TunnelId,
-        tunnel_tx: mpsc::Sender<Vec<u8>>,
+        tunnel_tx: mpsc::Sender<ChannelPackage>,
         tx: CommandNotifier,
     ) -> Result<()> {
         self.tunnel_txs.insert((peer_id, tunnel_id), tunnel_tx);
