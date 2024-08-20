@@ -8,7 +8,6 @@ use serde::Deserialize;
 const ACCESS_TTL: Duration = Duration::from_secs(10 * 60);
 
 pub struct AccessClient {
-    local_id: libp2p::PeerId,
     endpoint: reqwest::Url,
     client: reqwest::Client,
     cache: HashMap<PeerId, (bool, Instant)>,
@@ -20,9 +19,8 @@ struct AccessClientResponse {
 }
 
 impl AccessClient {
-    pub fn new(local_id: libp2p::PeerId, endpoint: reqwest::Url) -> AccessClient {
+    pub fn new(endpoint: reqwest::Url) -> AccessClient {
         AccessClient {
-            local_id,
             endpoint,
             client: reqwest::Client::new(),
             cache: HashMap::default(),
@@ -31,10 +29,7 @@ impl AccessClient {
 
     async fn request_endpoint(&mut self, peer: &PeerId) -> Result<bool, reqwest::Error> {
         let url = self.endpoint.join("access-control").unwrap();
-        let params = [
-            ("device", self.local_id.to_string()),
-            ("user", peer.to_string()),
-        ];
+        let params = [("peer_id", peer.to_string())];
 
         let response = self
             .client

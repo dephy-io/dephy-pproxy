@@ -119,8 +119,7 @@ impl PProxy {
         let (command_tx, command_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let swarm = crate::p2p::new_swarm(keypair, listen_addr)
             .map_err(|e| Error::Libp2pSwarmCreateError(e.to_string()))?;
-        let access_client = access_server_endpoint
-            .map(|endpoint| AccessClient::new(*swarm.local_peer_id(), endpoint));
+        let access_client = access_server_endpoint.map(AccessClient::new);
 
         Ok((
             Self {
