@@ -29,6 +29,8 @@ pub enum Error {
     TunnelNotWaiting(String),
     #[error("Tunnel dial failed: {0}")]
     TunnelDialFailed(String),
+    #[error("")]
+    TunnelContextNotFound(String),
     #[error("Tunnel error: {0:?}")]
     Tunnel(TunnelError),
     #[error("Protobuf decode error: {0}")]

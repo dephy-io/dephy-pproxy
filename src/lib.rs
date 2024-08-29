@@ -92,6 +92,11 @@ pub enum PProxyCommandResponse {
     ExpirePeerAccess {},
 }
 
+pub struct TunnelContext {
+    tx: mpsc::Sender<ChannelPackage>,
+    outbound_sent_notifier: Option<CommandNotifier>,
+}
+
 pub struct PProxy {
     command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
     command_rx: mpsc::Receiver<(PProxyCommand, CommandNotifier)>,
@@ -99,7 +104,7 @@ pub struct PProxy {
     proxy_addr: Option<SocketAddr>,
     outbound_ready_notifiers: HashMap<request_response::OutboundRequestId, CommandNotifier>,
     inbound_tunnels: HashMap<(PeerId, TunnelId), Tunnel>,
-    tunnel_txs: HashMap<(PeerId, TunnelId), mpsc::Sender<ChannelPackage>>,
+    tunnel_ctx: HashMap<(PeerId, TunnelId), TunnelContext>,
     access_client: Option<AccessClient>,
 }
 
@@ -129,7 +134,7 @@ impl PProxy {
                 proxy_addr,
                 outbound_ready_notifiers: HashMap::new(),
                 inbound_tunnels: HashMap::new(),
-                tunnel_txs: HashMap::new(),
+                tunnel_ctx: HashMap::new(),
                 access_client,
             },
             PProxyHandle {
@@ -175,7 +180,10 @@ impl PProxy {
         tunnel.listen(stream, tunnel_rx).await?;
 
         self.inbound_tunnels.insert((peer_id, tunnel_id), tunnel);
-        self.tunnel_txs.insert((peer_id, tunnel_id), tunnel_tx);
+        self.tunnel_ctx.insert((peer_id, tunnel_id), TunnelContext {
+            tx: tunnel_tx,
+            outbound_sent_notifier: None,
+        });
 
         Ok(())
     }
@@ -191,7 +199,7 @@ impl PProxy {
         &mut self,
         peer_id: PeerId,
         request: proto::Tunnel,
-    ) -> Result<Option<proto::Tunnel>> {
+    ) -> Result<proto::Tunnel> {
         let tunnel_id = request
             .tunnel_id
             .parse()
@@ -216,11 +224,11 @@ impl PProxy {
                     }
                 };
 
-                Ok(Some(proto::Tunnel {
+                Ok(proto::Tunnel {
                     tunnel_id: tunnel_id.to_string(),
                     command: proto::TunnelCommand::ConnectResp.into(),
                     data,
-                }))
+                })
             }
 
             proto::TunnelCommand::Package => {
@@ -231,16 +239,20 @@ impl PProxy {
                     return Err(Error::AccessDenied(peer_id.to_string()));
                 }
 
-                let Some(tx) = self.tunnel_txs.get(&(peer_id, tunnel_id)) else {
+                let Some(ctx) = self.tunnel_ctx.get(&(peer_id, tunnel_id)) else {
                     return Err(Error::ProtocolNotSupport(
                         "No tunnel for Package".to_string(),
                     ));
                 };
 
-                tx.send(Ok(request.data.unwrap_or_default())).await?;
+                ctx.tx.send(Ok(request.data.unwrap_or_default())).await?;
 
                 // Have to do this to close the response waiter in remote.
-                Ok(None)
+                Ok(proto::Tunnel {
+                    tunnel_id: tunnel_id.to_string(),
+                    command: proto::TunnelCommand::PackageResp.into(),
+                    data: None,
+                })
             }
 
             _ => Err(Error::ProtocolNotSupport(
@@ -263,7 +275,7 @@ impl PProxy {
 
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 self.inbound_tunnels.retain(|(p, _), _| p != &peer_id);
-                self.tunnel_txs.retain(|(p, _), _| p != &peer_id);
+                self.tunnel_ctx.retain(|(p, _), _| p != &peer_id);
             }
 
             SwarmEvent::Behaviour(PProxyNetworkBehaviourEvent::RequestResponse(
@@ -278,13 +290,13 @@ impl PProxy {
                         Err(e) => {
                             if let Ok(tunnel_id) = tunnel_id.parse() {
                                 self.inbound_tunnels.remove(&(peer, tunnel_id));
-                                self.tunnel_txs.remove(&(peer, tunnel_id));
+                                self.tunnel_ctx.remove(&(peer, tunnel_id));
                             }
-                            Some(proto::Tunnel {
+                            proto::Tunnel {
                                 tunnel_id,
                                 command: proto::TunnelCommand::Break.into(),
                                 data: Some(e.to_string().as_bytes().to_vec()),
-                            })
+                            }
                         }
                     };
 
@@ -299,11 +311,6 @@ impl PProxy {
                     request_id,
                     response,
                 } => {
-                    // This is response of TunnelCommand::Package
-                    let Some(response) = response else {
-                        return Ok(());
-                    };
-
                     match response.command() {
                         proto::TunnelCommand::ConnectResp => {
                             let tx = self
@@ -326,6 +333,28 @@ impl PProxy {
                             .map_err(|_| Error::EssentialTaskClosed)?;
                         }
 
+                        proto::TunnelCommand::PackageResp => {
+                            let tunnel_id = response.tunnel_id.parse().map_err(|_| {
+                                Error::TunnelIdParseError(response.tunnel_id.clone())
+                            })?;
+
+                            let Some(ctx) = self.tunnel_ctx.get_mut(&(peer, tunnel_id)) else {
+                                return Err(Error::ProtocolNotSupport(
+                                    "No ctx for Package".to_string(),
+                                ));
+                            };
+
+                            let Some(notifier) = ctx.outbound_sent_notifier.take() else {
+                                return Err(Error::ProtocolNotSupport(
+                                    "No notifier for Package".to_string(),
+                                ));
+                            };
+
+                            notifier
+                                .send(Ok(PProxyCommandResponse::SendOutboundPackageCommand {}))
+                                .map_err(|_| Error::EssentialTaskClosed)?;
+                        }
+
                         proto::TunnelCommand::Break => {
                             let tunnel_id = response.tunnel_id.parse().map_err(|_| {
                                 Error::TunnelIdParseError(response.tunnel_id.clone())
@@ -338,8 +367,8 @@ impl PProxy {
                             }
 
                             // Terminat connected tunnel
-                            if let Some(tx) = self.tunnel_txs.remove(&(peer, tunnel_id)) {
-                                tx.send(Err(TunnelError::ConnectionAborted)).await?
+                            if let Some(ctx) = self.tunnel_ctx.remove(&(peer, tunnel_id)) {
+                                ctx.tx.send(Err(TunnelError::ConnectionAborted)).await?
                             };
                         }
 
@@ -432,7 +461,10 @@ impl PProxy {
         tunnel_tx: mpsc::Sender<ChannelPackage>,
         tx: CommandNotifier,
     ) -> Result<()> {
-        self.tunnel_txs.insert((peer_id, tunnel_id), tunnel_tx);
+        self.tunnel_ctx.insert((peer_id, tunnel_id), TunnelContext {
+            tx: tunnel_tx,
+            outbound_sent_notifier: None,
+        });
 
         let request = proto::Tunnel {
             tunnel_id: tunnel_id.to_string(),
@@ -465,13 +497,23 @@ impl PProxy {
             data: Some(data),
         };
 
+        let Some(ctx) = self.tunnel_ctx.get_mut(&(peer_id, tunnel_id)) else {
+            let err_msg = "No ctx for outbound package";
+
+            tx.send(Err(Error::TunnelContextNotFound(err_msg.to_string())))
+                .map_err(|_| Error::EssentialTaskClosed)?;
+
+            return Err(Error::TunnelContextNotFound(err_msg.to_string()));
+        };
+
+        ctx.outbound_sent_notifier = Some(tx);
+
         self.swarm
             .behaviour_mut()
             .request_response
             .send_request(&peer_id, request);
 
-        tx.send(Ok(PProxyCommandResponse::SendOutboundPackageCommand {}))
-            .map_err(|_| Error::EssentialTaskClosed)
+        Ok(())
     }
 
     async fn on_expire_peer_access(&mut self, peer_id: PeerId, tx: CommandNotifier) -> Result<()> {

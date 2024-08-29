@@ -19,7 +19,7 @@ pub struct Codec;
 impl libp2p::request_response::Codec for Codec {
     type Protocol = StreamProtocol;
     type Request = proto::Tunnel;
-    type Response = Option<proto::Tunnel>;
+    type Response = proto::Tunnel;
 
     async fn read_request<T>(
         &mut self,
@@ -48,13 +48,7 @@ impl libp2p::request_response::Codec for Codec {
 
         io.take(RESPONSE_SIZE_MAXIMUM).read_to_end(&mut vec).await?;
 
-        if vec.is_empty() {
-            return Ok(None);
-        }
-
-        proto::Tunnel::decode(vec.as_slice())
-            .map(Some)
-            .map_err(decode_into_io_error)
+        proto::Tunnel::decode(vec.as_slice()).map_err(decode_into_io_error)
     }
 
     async fn write_request<T>(
@@ -80,14 +74,8 @@ impl libp2p::request_response::Codec for Codec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let mut data = vec![];
-
-        if let Some(resp) = resp {
-            data.extend_from_slice(resp.encode_to_vec().as_slice());
-        };
-
+        let data = resp.encode_to_vec();
         io.write_all(data.as_ref()).await?;
-
         Ok(())
     }
 }
@@ -137,7 +125,7 @@ mod tests {
 
         let (mut a, mut b) = Endpoint::pair(124, 124);
         Codec
-            .write_response(&protocol, &mut a, Some(expected_response.clone()))
+            .write_response(&protocol, &mut a, expected_response.clone())
             .await
             .expect("Should write response");
         a.close().await.unwrap();
@@ -148,6 +136,6 @@ mod tests {
             .expect("Should read response");
         b.close().await.unwrap();
 
-        assert_eq!(actual_response, Some(expected_response));
+        assert_eq!(actual_response, expected_response);
     }
 }
