@@ -3,10 +3,6 @@ version = 2
 yanked = "warn"
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
-ignore = [
-  # wait for libp2p to update
-  "RUSTSEC-2024-0344",
-]
 
 [bans]
 multiple-versions = "warn"

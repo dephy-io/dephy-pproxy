@@ -8,7 +8,7 @@ async-trait = "0.1.81"
 clap = "4.5.4"
 futures = "0.3.30"
 hex = "0.4.3"
-libp2p = { version = "0.53.2", features = ["tokio", "macros", "yamux", "noise", "tcp", "request-response", "relay", "secp256k1"] }
+libp2p = { version = "0.54.1", features = ["tokio", "macros", "yamux", "noise", "tcp", "request-response", "relay", "secp256k1"] }
 prost = "0.13.1"
 reqwest = { version = "0.12.5", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1.0.207", features = ["derive"] }
