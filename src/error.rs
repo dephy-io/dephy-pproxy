@@ -1,8 +1,12 @@
 use std::io::ErrorKind as IOErrorKind;
 
+use crate::types::TunnelReply;
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    #[error("Io error: {0}")]
+    IoError(#[from] std::io::Error),
     #[error("Multiaddr parse error: {0}")]
     MultiaddrParseError(String),
     #[error("SocketAddr parse error: {0}")]
@@ -17,8 +21,12 @@ pub enum Error {
     EssentialTaskClosed,
     #[error("Libp2p swarm create error: {0}")]
     Libp2pSwarmCreateError(String),
+    #[error("Libp2p dial error: {0}")]
+    Libp2pDialError(#[from] libp2p::swarm::DialError),
     #[error("Libp2p transport error: {0}")]
     Libp2pTransportError(#[from] libp2p::core::transport::TransportError<std::io::Error>),
+    #[error("Libp2p open stream error")]
+    Libp2pOpenStreamError(#[from] libp2p_stream::OpenStreamError),
     #[error("Reqwest error: {0}")]
     ReqwestError(#[from] reqwest::Error),
     #[error("Protocol not support: {0}")]
@@ -32,7 +40,9 @@ pub enum Error {
     #[error("Tunnel context not found: {0}")]
     TunnelContextNotFound(String),
     #[error("Tunnel error: {0:?}")]
-    Tunnel(TunnelError),
+    TunnelError(TunnelError),
+    #[error("Tunnel protocol error: {0}")]
+    TunnelProtocolError(#[from] TunnelProtocolError),
     #[error("Protobuf decode error: {0}")]
     ProtobufDecode(#[from] prost::DecodeError),
     #[error("Access denied, peer: {0}")]
@@ -67,6 +77,33 @@ pub enum TunnelError {
     Unknown = u8::MAX,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum TunnelProtocolError {
+    #[error("{0}")]
+    IoError(#[from] std::io::Error),
+    #[error("unsupported tunnel version {0:#x}")]
+    UnsupportedTunnelVersion(u8),
+    #[error("unsupported command {0:#x}")]
+    UnsupportedCommand(u8),
+    #[error("{0}")]
+    TunnelReply(TunnelReply),
+}
+
+impl TunnelProtocolError {
+    /// Convert to `TunnelReply` for responding
+    pub fn as_reply(&self) -> TunnelReply {
+        match *self {
+            TunnelProtocolError::IoError(ref err) => match err.kind() {
+                std::io::ErrorKind::ConnectionRefused => TunnelReply::ConnectionRefused,
+                _ => TunnelReply::GeneralFailure,
+            },
+            TunnelProtocolError::UnsupportedTunnelVersion(..) => TunnelReply::GeneralFailure,
+            TunnelProtocolError::UnsupportedCommand(..) => TunnelReply::CommandNotSupported,
+            TunnelProtocolError::TunnelReply(r) => r,
+        }
+    }
+}
+
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for Error {
     fn from(_: tokio::sync::mpsc::error::SendError<T>) -> Self {
         Error::EssentialTaskClosed
@@ -81,7 +118,7 @@ impl From<futures::channel::oneshot::Canceled> for Error {
 
 impl From<TunnelError> for Error {
     fn from(error: TunnelError) -> Self {
-        Error::Tunnel(error)
+        Error::TunnelError(error)
     }
 }
 

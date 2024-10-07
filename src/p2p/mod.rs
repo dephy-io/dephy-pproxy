@@ -6,12 +6,14 @@ use libp2p::noise;
 use libp2p::swarm::Swarm;
 use libp2p::tcp;
 use libp2p::yamux;
+use libp2p::StreamProtocol;
 
 pub(crate) use crate::p2p::behaviour::PProxyNetworkBehaviour;
 pub(crate) use crate::p2p::behaviour::PProxyNetworkBehaviourEvent;
 
 mod behaviour;
-mod codec;
+
+pub const PPROXY_PROTOCOL: StreamProtocol = StreamProtocol::new("/pproxy/1.0.0");
 
 pub(crate) fn new_swarm(
     keypair: Keypair,

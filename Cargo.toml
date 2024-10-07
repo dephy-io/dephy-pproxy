@@ -1,20 +1,22 @@
 [package]
 name = "dephy-pproxy"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 
 [dependencies]
 async-trait = "0.1.81"
+bytes = "1.7.2"
 clap = "4.5.4"
 futures = "0.3.30"
 hex = "0.4.3"
-libp2p = { version = "0.54.1", features = ["tokio", "macros", "yamux", "noise", "tcp", "request-response", "relay", "secp256k1"] }
+libp2p = { version = "0.54.1", features = ["tokio", "macros", "yamux", "noise", "tcp", "relay", "secp256k1"] }
+libp2p-stream = "0.2.0-alpha"
 prost = "0.13.1"
 reqwest = { version = "0.12.5", features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1.0.207", features = ["derive"] }
 thiserror = "1.0.60"
-tokio = { version = "1.37.0", features = ["rt-multi-thread"] }
-tokio-util = "0.7.11"
+tokio = { version = "1.37.0", features = ["io-util", "rt-multi-thread"] }
+tokio-util = { version = "0.7.11", features = ["compat"] }
 tonic = "0.12.1"
 tonic-web = "0.12.1"
 tracing = "0.1.40"
