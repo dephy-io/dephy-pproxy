@@ -73,7 +73,11 @@ pub enum PProxyCommand {
     ConnectRelay {
         multiaddr: Multiaddr,
     },
-    SendConnectCommand {
+    ConnectTunnel {
+        peer_id: PeerId,
+        tunnel_id: TunnelId,
+    },
+    CleanTunnel {
         peer_id: PeerId,
         tunnel_id: TunnelId,
     },
@@ -86,14 +90,17 @@ pub enum PProxyCommand {
 pub enum PProxyCommandResponse {
     AddPeer { peer_id: PeerId },
     ConnectRelay { relaied_multiaddr: Multiaddr },
-    SendConnectCommand { remote_stream: Stream },
+    ConnectTunnel { remote_stream: Stream },
+    CleanTunnel {},
     ExpirePeerAccess {},
 }
 
 pub struct PProxy {
+    command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
     command_rx: mpsc::Receiver<(PProxyCommand, CommandNotifier)>,
     swarm: Swarm<PProxyNetworkBehaviour>,
     stream_control: libp2p_stream::Control,
+    inbound_tunnels: HashMap<(PeerId, TunnelId), Tunnel>,
     proxy_addr: Option<SocketAddr>,
     access_client: Option<AccessClient>,
 }
@@ -119,9 +126,11 @@ impl PProxy {
 
         Ok((
             Self {
+                command_tx: command_tx.clone(),
                 command_rx,
                 swarm,
                 stream_control,
+                inbound_tunnels: HashMap::new(),
                 proxy_addr,
                 access_client,
             },
@@ -179,6 +188,9 @@ impl PProxy {
                 address.push(Protocol::P2p(*self.swarm.local_peer_id()));
                 println!("Local node is listening on {address}");
             }
+            SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                self.inbound_tunnels.retain(|(p, _), _| p != &peer_id);
+            }
             _ => {}
         }
 
@@ -226,7 +238,10 @@ impl PProxy {
                     .write_to(&mut remote_stream)
                     .await?;
 
-                tunnel.listen(local_stream, remote_stream).await?;
+                tunnel
+                    .listen(self.command_tx.clone(), local_stream, remote_stream)
+                    .await?;
+                self.inbound_tunnels.insert((peer_id, header.id), tunnel);
             }
         }
 
@@ -239,8 +254,11 @@ impl PProxy {
                 self.on_add_peer(multiaddr, peer_id, tx).await
             }
             PProxyCommand::ConnectRelay { multiaddr } => self.on_connect_relay(multiaddr, tx).await,
-            PProxyCommand::SendConnectCommand { peer_id, tunnel_id } => {
-                self.on_send_connect_command(peer_id, tunnel_id, tx).await
+            PProxyCommand::ConnectTunnel { peer_id, tunnel_id } => {
+                self.on_connect_tunnel(peer_id, tunnel_id, tx).await
+            }
+            PProxyCommand::CleanTunnel { peer_id, tunnel_id } => {
+                self.on_clean_tunnel(peer_id, tunnel_id, tx).await
             }
             PProxyCommand::ExpirePeerAccess { peer_id } => {
                 self.on_expire_peer_access(peer_id, tx).await
@@ -272,7 +290,7 @@ impl PProxy {
         .map_err(|_| Error::EssentialTaskClosed)
     }
 
-    async fn on_send_connect_command(
+    async fn on_connect_tunnel(
         &mut self,
         peer_id: PeerId,
         tunnel_id: TunnelId,
@@ -291,10 +309,8 @@ impl PProxy {
 
         match resp.reply {
             TunnelReply::Succeeded => {
-                tx.send(Ok(PProxyCommandResponse::SendConnectCommand {
-                    remote_stream,
-                }))
-                .map_err(|_| Error::EssentialTaskClosed)?;
+                tx.send(Ok(PProxyCommandResponse::ConnectTunnel { remote_stream }))
+                    .map_err(|_| Error::EssentialTaskClosed)?;
             }
             e => {
                 remote_stream.close().await?;
@@ -306,6 +322,17 @@ impl PProxy {
         }
 
         Ok(())
+    }
+
+    async fn on_clean_tunnel(
+        &mut self,
+        peer_id: PeerId,
+        tunnel_id: TunnelId,
+        tx: CommandNotifier,
+    ) -> Result<()> {
+        self.inbound_tunnels.remove(&(peer_id, tunnel_id));
+        tx.send(Ok(PProxyCommandResponse::CleanTunnel {}))
+            .map_err(|_| Error::EssentialTaskClosed)
     }
 
     async fn on_expire_peer_access(&mut self, peer_id: PeerId, tx: CommandNotifier) -> Result<()> {

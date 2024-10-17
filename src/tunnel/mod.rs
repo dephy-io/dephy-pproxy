@@ -43,14 +43,15 @@ pub struct TunnelServerListener {
 pub struct Tunnel {
     peer_id: PeerId,
     tunnel_id: TunnelId,
-    listener_cancel_token: Option<CancellationToken>,
     listener: Option<tokio::task::JoinHandle<()>>,
 }
 
 pub struct TunnelListener {
+    peer_id: PeerId,
+    tunnel_id: TunnelId,
+    pproxy_command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
     local_stream: TcpStream,
     remote_stream: Compat<Stream>,
-    cancel_token: CancellationToken,
 }
 
 impl Drop for TunnelServer {
@@ -72,15 +73,8 @@ impl Drop for TunnelServer {
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
-        if let Some(cancel_token) = self.listener_cancel_token.take() {
-            cancel_token.cancel();
-        }
-
         if let Some(listener) = self.listener.take() {
-            tokio::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                listener.abort();
-            });
+            listener.abort();
         }
 
         tracing::info!("Tunnel {}-{} dropped", self.peer_id, self.tunnel_id);
@@ -167,7 +161,7 @@ impl TunnelServerListener {
             if let Err(e) = self
                 .pproxy_command_tx
                 .send((
-                    PProxyCommand::SendConnectCommand {
+                    PProxyCommand::ConnectTunnel {
                         peer_id: self.peer_id,
                         tunnel_id,
                     },
@@ -175,28 +169,33 @@ impl TunnelServerListener {
                 ))
                 .await
             {
-                tracing::error!("Send connect command channel tx failed: {e:?}");
+                tracing::error!("ConnectTunnel tx failed: {e:?}");
                 continue;
             }
 
             match rx.await {
                 Err(e) => {
-                    tracing::error!("Send connect command channel rx failed: {e:?}");
+                    tracing::error!("ConnectTunnel rx failed: {e:?}");
                     continue;
                 }
                 Ok(Err(e)) => {
-                    tracing::error!("Send connect command channel failed: {e:?}");
+                    tracing::error!("ConnectTunnel response failed: {e:?}");
                     continue;
                 }
                 Ok(Ok(resp)) => match resp {
-                    PProxyCommandResponse::SendConnectCommand { remote_stream } => {
-                        if let Err(e) = tunnel.listen(stream, remote_stream).await {
+                    PProxyCommandResponse::ConnectTunnel { remote_stream } => {
+                        if let Err(e) = tunnel
+                            .listen(self.pproxy_command_tx.clone(), stream, remote_stream)
+                            .await
+                        {
                             tracing::error!("Tunnel listen failed: {e:?}");
                             continue;
                         };
                     }
                     other_resp => {
-                        tracing::error!("Send connect command channel got invalid pproxy command response {other_resp:?}");
+                        tracing::error!(
+                            "ConnectTunnel got invalid pproxy command response {other_resp:?}"
+                        );
                         continue;
                     }
                 },
@@ -213,12 +212,12 @@ impl Tunnel {
             peer_id,
             tunnel_id,
             listener: None,
-            listener_cancel_token: None,
         }
     }
 
     pub async fn listen(
         &mut self,
+        pproxy_command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
         local_stream: TcpStream,
         remote_stream: Stream,
     ) -> Result<(), TunnelError> {
@@ -226,35 +225,92 @@ impl Tunnel {
             return Err(TunnelError::AlreadyListened);
         }
 
-        let mut listener = TunnelListener::new(local_stream, remote_stream).await;
-        let listener_cancel_token = listener.cancel_token();
+        let mut listener = TunnelListener::new(
+            self.peer_id,
+            self.tunnel_id,
+            pproxy_command_tx,
+            local_stream,
+            remote_stream,
+        )
+        .await;
         let listener_handler = tokio::spawn(Box::pin(async move { listener.listen().await }));
 
         self.listener = Some(listener_handler);
-        self.listener_cancel_token = Some(listener_cancel_token);
 
         Ok(())
     }
 }
 
 impl TunnelListener {
-    async fn new(local_stream: TcpStream, remote_stream: Stream) -> Self {
+    async fn new(
+        peer_id: PeerId,
+        tunnel_id: TunnelId,
+        pproxy_command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
+        local_stream: TcpStream,
+        remote_stream: Stream,
+    ) -> Self {
         let remote_stream = remote_stream.compat();
         Self {
+            peer_id,
+            tunnel_id,
+            pproxy_command_tx,
             local_stream,
             remote_stream,
-            cancel_token: CancellationToken::new(),
         }
     }
 
-    fn cancel_token(&self) -> CancellationToken {
-        self.cancel_token.clone()
-    }
-
     async fn listen(&mut self) {
-        tokio::io::copy_bidirectional(&mut self.local_stream, &mut self.remote_stream)
+        match tokio::io::copy_bidirectional(&mut self.local_stream, &mut self.remote_stream).await {
+            Ok((rn, wn)) => {
+                tracing::trace!(
+                    "tcp tunnel {} <-> {} (peer_id) closed, L2R {} bytes, R2L {} bytes",
+                    self.tunnel_id,
+                    self.peer_id,
+                    rn,
+                    wn
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "tcp tunnel {} <-> {} (peer_id) closed with error: {}",
+                    self.tunnel_id,
+                    self.peer_id,
+                    e,
+                );
+            }
+        }
+
+        let (tx, rx) = oneshot::channel();
+        if let Err(e) = self
+            .pproxy_command_tx
+            .send((
+                PProxyCommand::CleanTunnel {
+                    peer_id: self.peer_id,
+                    tunnel_id: self.tunnel_id,
+                },
+                tx,
+            ))
             .await
-            .unwrap();
+        {
+            tracing::error!("CleanTunnel tx failed: {e:?}");
+        }
+
+        match rx.await {
+            Err(e) => {
+                tracing::error!("CleanTunnel rx failed: {e:?}");
+            }
+            Ok(Err(e)) => {
+                tracing::error!("CleanTunnel response failed: {e:?}");
+            }
+            Ok(Ok(resp)) => match resp {
+                PProxyCommandResponse::CleanTunnel {} => {}
+                other_resp => {
+                    tracing::error!(
+                        "CleanTunnel got invalid pproxy command response {other_resp:?}"
+                    );
+                }
+            },
+        }
     }
 }
 
