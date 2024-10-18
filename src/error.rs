@@ -13,6 +13,8 @@ pub enum Error {
     SocketAddrParseError(String),
     #[error("Failed to extract peer id from multiaddr: {0}")]
     FailedToExtractPeerIdFromMultiaddr(String),
+    #[error("Unknown peer: {0}")]
+    UnknownPeer(String),
     #[error("PeerId parse error: {0}")]
     PeerIdParseError(String),
     #[error("TunnelId parse error: {0}")]

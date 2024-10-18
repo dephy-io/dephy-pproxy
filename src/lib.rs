@@ -99,6 +99,7 @@ pub struct PProxy {
     command_tx: mpsc::Sender<(PProxyCommand, CommandNotifier)>,
     command_rx: mpsc::Receiver<(PProxyCommand, CommandNotifier)>,
     swarm: Swarm<PProxyNetworkBehaviour>,
+    known_peers: HashMap<PeerId, Multiaddr>,
     stream_control: libp2p_stream::Control,
     inbound_tunnels: HashMap<(PeerId, TunnelId), Tunnel>,
     proxy_addr: Option<SocketAddr>,
@@ -129,6 +130,7 @@ impl PProxy {
                 command_tx: command_tx.clone(),
                 command_rx,
                 swarm,
+                known_peers: HashMap::new(),
                 stream_control,
                 inbound_tunnels: HashMap::new(),
                 proxy_addr,
@@ -272,7 +274,8 @@ impl PProxy {
         peer_id: PeerId,
         tx: CommandNotifier,
     ) -> Result<()> {
-        self.swarm.dial(multiaddr)?;
+        self.swarm.dial(multiaddr.clone())?;
+        self.known_peers.insert(peer_id, multiaddr);
         tx.send(Ok(PProxyCommandResponse::AddPeer { peer_id }))
             .map_err(|_| Error::EssentialTaskClosed)
     }
@@ -296,6 +299,14 @@ impl PProxy {
         tunnel_id: TunnelId,
         tx: CommandNotifier,
     ) -> Result<()> {
+        let multiaddr = self
+            .known_peers
+            .get(&peer_id)
+            .ok_or_else(|| Error::UnknownPeer(peer_id.to_string()))?;
+        if let Err(e) = self.swarm.dial(multiaddr.clone()) {
+            tracing::debug!("failed to dial to peer when connect tunnel: {e:?}");
+        }
+
         let mut remote_stream = self
             .stream_control
             .open_stream(peer_id, PPROXY_PROTOCOL)
