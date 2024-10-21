@@ -58,6 +58,13 @@ fn parse_args() -> Command {
                 .num_args(1)
                 .action(ArgAction::Set)
                 .help("Access server endpoint is used to verify if one peer can access another. If not set, all access is allowed."),
+        )
+        .arg(
+            Arg::new("EXTERNAL_IP")
+                .long("external-ip")
+                .num_args(1)
+                .action(ArgAction::Set)
+                .help("External ip for relay behaviour. If not set, no external ip will be assigned."),
         );
 
     let create_tunnel_server = Command::new("create_tunnel_server")
@@ -142,6 +149,9 @@ async fn serve(args: &ArgMatches) {
     let access_server_endpoint = args
         .get_one::<String>("ACCESS_SERVER_ENDPOINT")
         .map(|endpoint| Url::parse(endpoint).expect("Invalid access server endpoint"));
+    let external_ip = args
+        .get_one::<String>("EXTERNAL_IP")
+        .map(|addr| addr.parse().expect("Invalid external ip"));
 
     println!("server_addr: {}", server_addr);
     println!("commander_server_addr: {}", commander_server_addr);
@@ -151,6 +161,7 @@ async fn serve(args: &ArgMatches) {
         server_addr,
         proxy_addr,
         access_server_endpoint,
+        external_ip,
     )
     .expect("Create pproxy failed");
 

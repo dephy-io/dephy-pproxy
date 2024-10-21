@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
@@ -118,9 +119,10 @@ impl PProxy {
         listen_addr: SocketAddr,
         proxy_addr: Option<SocketAddr>,
         access_server_endpoint: Option<reqwest::Url>,
+        external_ip: Option<IpAddr>,
     ) -> Result<(Self, PProxyHandle)> {
         let (command_tx, command_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
-        let swarm = crate::p2p::new_swarm(keypair, listen_addr)
+        let swarm = crate::p2p::new_swarm(keypair, listen_addr, external_ip)
             .map_err(|e| Error::Libp2pSwarmCreateError(e.to_string()))?;
         let stream_control = swarm.behaviour().stream.new_control();
         let access_client = access_server_endpoint.map(AccessClient::new);
