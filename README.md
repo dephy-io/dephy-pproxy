@@ -30,7 +30,7 @@ pproxy serve
 
 Create a tunnel server locally that will transmit package to remote peer. Run the command on local peer B.
 ```shell
-pproxy create_tunnel_server --tunnel-server-addr 127.0.0.1:8888 --peer-multiaddr <The litep2p multiaddr>
+pproxy create_tunnel_server --tunnel-server-addr 127.0.0.1:8888 --peer-multiaddr <The libp2p multiaddr>
 ```
 
 Access jupyter server from local peer B.
